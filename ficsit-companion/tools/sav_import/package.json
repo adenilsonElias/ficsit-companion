@@ -1,0 +1,17 @@
+{
+  "name": "ficsit-companion-sav-import",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Node wrapper around @etothepii/satisfactory-file-parser that emits the ficsit-companion import JSON schema. Targets Satisfactory 1.2 save format.",
+  "type": "commonjs",
+  "scripts": {
+    "parse": "node wrapper.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@etothepii/satisfactory-file-parser": "^4.1.1"
+  }
+}

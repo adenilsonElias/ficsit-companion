@@ -1,0 +1,11 @@
+[DBG] 2147342468 comp=Output1 port={"dir":"out","index":0,"role":null} connectedTo=ConveyorAny0
+[DBG] 2147342468 comp=InventoryPotential port=null connectedTo=none
+[DBG] 2147342468 comp=powerInfo port=null connectedTo=none
+[DBG] 2147342468 comp=inventory port=null connectedTo=none
+[DBG] 2147342468 comp=FuelInventory port=null connectedTo=none
+[DBG] 2147342468 comp=Input2 port={"dir":"in","index":1,"role":null} connectedTo=ConveyorAny1
+[DBG] 2147342468 comp=Input0 port={"dir":"in","index":-1,"role":null} connectedTo=ConveyorAny1
+[DBG] 2147342468 comp=Input1 port={"dir":"in","index":0,"role":null} connectedTo=ConveyorAny1
+[DBG] 2147342468 comp=Output0 port={"dir":"out","index":-1,"role":null} connectedTo=ConveyorAny0
+[DBG] 2147342468 comp=FGFactoryLegs port=null connectedTo=none
+[DBG] 2147342468 comp=PowerInput port=null connectedTo=none

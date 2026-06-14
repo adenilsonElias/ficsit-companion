@@ -1,0 +1,219 @@
+#pragma once
+
+#include <memory>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <imgui_node_editor.h>
+
+#include "app/base_app.hpp"
+#include "infra/editor_backend.hpp"
+#include "infra/file_store.hpp"
+#include "domain/fractional_number.hpp"
+#include "domain/graph_model.hpp"
+#include "domain/resource_flow.hpp"
+#include "infra/sav_import.hpp"
+#include "infra/save_watcher.hpp"
+#include "infra/session_serializer.hpp"
+#include "infra/settings_store.hpp"
+
+struct Link;
+struct Node;
+struct Pin;
+struct Recipe;
+
+class ProductionApp : public BaseApp
+{
+public:
+    ProductionApp();
+    virtual ~ProductionApp();
+    /// @brief Save current session (should NOT require an active ImGui context)
+    virtual void SaveSession() override;
+
+protected:
+    virtual void RenderImpl() override;
+
+private:
+    /// @brief Load saved session if present
+    void LoadSession();
+
+    /// @brief Serialize the app state to a string
+    /// @return Serialized state of this app
+    std::string Serialize() const;
+
+    /// @brief Restore app state from a string
+    /// @param s Serialized app state to load
+    void Deserialize(const std::string& s);
+
+    /// @brief Get the next available id for node-editor
+    /// @return The next id to use
+    unsigned long long int GetNextId();
+
+    /// @brief Search for a Pin given its id
+    /// @param id The pin id
+    /// @return A pointer to the Pin, nullptr if not found
+    Pin* FindPin(ax::NodeEditor::PinId id) const;
+
+    /// @brief Create a link between two pins, they can be in any order
+    /// @param start First link Pin
+    /// @param end Second link Pin
+    /// @param trigger_update If true, will trigger an update of the graph from start pin
+    void CreateLink(Pin* start, Pin* end, const bool trigger_update);
+
+    /// @brief Delete a Link from this App, will also delete it from the graph view
+    /// @param id Link id
+    void DeleteLink(const ax::NodeEditor::LinkId id);
+
+    /// @brief Delete a Node from this App, will also delete it from the graph view
+    /// @param id Node id
+    void DeleteNode(const ax::NodeEditor::NodeId id);
+
+    /// @brief Propagate rates updates from pin through the graph
+    bool UpdateNodesRate(const Pin* pin, const FractionalNumber& new_rate);
+
+    /// @brief Check for Arrow key inputs and nudge selected nodes if required
+    void NudgeNodes();
+
+    /// @brief Copy the position from the graph into the nodes struct
+    void PullNodesPosition();
+
+    /// @brief Bundle all selected nodes by a group node
+    void GroupSelectedNodes();
+
+    /// @brief Unpack all nodes contained in the currently selected node
+    void UngroupSelectedNode();
+
+    /// @brief Create a copy of all selected nodes, including internal links between them
+    void DuplicateSelectedNodes();
+
+
+    /// @brief Render the panel on the left with global info (inputs/outputs/etc...)
+    void RenderLeftPanel();
+    /// @brief Render the toggleable Resource Flow window (per-item produced/
+    /// consumed/net ledger). No-op when settings.show_resource_flow is false.
+    void RenderResourceFlowWindow();
+    /// @brief Render the nodes in the main graph view
+    void RenderNodes();
+    /// @brief Render the links in the main graph view
+    void RenderLinks();
+    /// @brief Handle user dragging link to an empty space or another pin
+    void DragLink();
+    /// @brief React to user deleting nodes/links in the graph view
+    void DeleteNodesLinks();
+    /// @brief React to user wanting to create a new node (either by right clicking or dragging a Link in empty space)
+    void AddNewNode();
+    /// @brief Tooltips in the graph view are rendered in a second pass after everything else. Otherwise they are not at the right place
+    void RenderTooltips();
+    /// @brief Display a popup centered in the screen with all controls
+    void RenderControlsPopup();
+    /// @brief React to app-specific key pressed
+    void CustomKeyControl();
+    /// @brief Focus the view on the next recipe with the corresponding name
+    /// @param recipe Name of the recipe to search
+    void FocusNextRecipe(const std::string& recipe);
+    /// @brief Focus the view on the next item with the corresponding name
+    /// @param item Name of the item to search
+    void FocusNextItem(const std::string& item);
+    /// @brief Focus the view on the next node with num somersloop > 0
+    void FocusNextSomersloop();
+
+    /// @brief Render the "Save Import" section of the left panel (folder picker,
+    /// world selector, watcher toggle, manual import buttons).
+    void RenderSavImportSection();
+
+    /// @brief Spawn the wrapper.js parser on a .sav file and synchronously
+    /// collect its JSON output (desktop only). Returns empty on failure.
+    std::string RunSavParserDesktop(const std::string& sav_path, std::string& err);
+
+    /// @brief Parse the wrapper JSON, build a GroupNode out of the resulting
+    /// graph and append it to the canvas.
+    void ImportSavFromJson(const std::string& wrapper_json);
+
+    /// @brief Trigger a manual import of the given .sav file. Used by the
+    /// desktop "Import now"/"Browse..." button and by the watcher.
+    void ImportSavFile(const std::string& sav_path);
+
+    /// @brief Drain pending paths from the SaveWatcher and import them.
+    /// Called once per frame.
+    void DrainPendingImports();
+
+    /// @brief Rescan the configured save folder to discover distinct world
+    /// names (used by the "Select world to track" popup).
+    void RefreshDiscoveredWorlds();
+
+private:
+    /// @brief Used in saved files to track when format change. Used to update files saved with previous versions
+    static constexpr int SAVE_VERSION = 7;
+
+    /// @brief Window id used for the Add Node popup
+    static constexpr std::string_view add_node_popup_id = "Add Node";
+    /// @brief Folder to save/load the serialized graph
+    static constexpr std::string_view save_folder = "saved";
+    /// @brief Path used to save current session file
+    static constexpr std::string_view session_file = "last_session.fcs";
+    /// @brief Path used to save app settings
+    static constexpr std::string_view settings_file = "settings.json";
+
+    /// @brief All settings to customize app behaviour
+    Settings settings;
+
+    /// @brief Persistent settings load/save via file_store
+    std::unique_ptr<SettingsStore> settings_store;
+
+    /// @brief Editor backend used by non-render graph logic.
+    std::unique_ptr<IEditorBackend> editor_backend;
+
+    /// @brief Owns graph nodes, links, ids, and graph mutations.
+    GraphModel graph;
+
+    /// @brief Serializes/deserializes graph sessions through GraphModel.
+    std::unique_ptr<SessionSerializer> session_serializer;
+
+    /// @brief All nodes currently in the graph view
+    std::vector<std::unique_ptr<Node>>& nodes = graph.nodes;
+    /// @brief All links currently in the graph view
+    std::vector<std::unique_ptr<Link>>& links = graph.links;
+
+    ax::NodeEditor::Config config;
+    ax::NodeEditor::EditorContext* context;
+
+    double last_time_saved_session;
+
+    /* Values used during the rendering pass to save UI state between frames */
+    std::string save_name;
+    std::vector<std::pair<std::string, size_t>> file_suggestions;
+    bool popup_opened;
+    ImVec2 new_node_position;
+    Pin* new_node_pin;
+    std::string recipe_filter;
+    ResourceFlowFilter resource_flow_filter = ResourceFlowFilter::All;
+    std::string resource_flow_search;
+    std::vector<std::string> frame_tooltips;
+
+    unsigned int somersloop_texture_id;
+
+    float error_time;
+
+    // Used to cycle through the nodes when clicking on the corresponding
+    // element on the left panel
+    std::string last_clicked_recipe;
+    int next_clicked_recipe;
+    std::string last_clicked_item;
+    int next_clicked_item;
+    int next_clicked_somersloop;
+
+    /// @brief Persistent storage abstraction (DiskFileStore on desktop, WebFileStore on web)
+    std::unique_ptr<IFileStore> file_store;
+
+    // Save import state
+    SaveWatcher save_watcher;
+    std::vector<std::string> discovered_worlds;
+    std::string sav_last_imported_path;
+    std::string sav_last_error;
+    /// @brief Full warning list from the last import (each entry is one line).
+    /// Used to drive the "View warnings" popup so the user can copy them.
+    std::vector<std::string> sav_last_warnings;
+    double sav_last_import_time = 0.0;
+};

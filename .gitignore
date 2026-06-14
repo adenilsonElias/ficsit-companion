@@ -1,3 +1,32 @@
 build*/
 scripts/*
 !scripts/*.py
+
+# Node dependencies (tools/sav_import)
+node_modules/
+
+# Game save files (local test data)
+*.sav
+
+# Coverage reports (OpenCppCoverage / ctest)
+coverage.xml
+coverage-html/
+LastCoverageResults.log
+
+# Local node-graph session / snapshot files (generated locally, like .sav)
+*.fcs
+
+# Local scratch / debug artifacts (manual `node wrapper.js > X.json` dumps,
+# analysis output, debug screenshots). Use tmp/ or scratch/ for throwaways.
+tmp/
+scratch/
+/import_dbg.json
+/verify_imp.json
+wrong_connection*.png
+
+# Windows / Visual Studio / editor cruft
+.vs/
+*.user
+CMakeUserPresets.json
+.DS_Store
+Thumbs.db

@@ -76,6 +76,36 @@ Currently, if you want to visualize a previously generated production chain, you
 
 ## Building
 
+> **Note:** [Node.js](https://nodejs.org/) is only required for the optional save-import feature (`ficsit-companion/tools/sav_import`). You do **not** need it to build or run the core app.
+
+### Windows
+
+**Prerequisites:** [Visual Studio 2022 or newer](https://visualstudio.microsoft.com/) with the *"Desktop development with C++"* workload (this bundles CMake). The `windows` preset automatically uses your newest installed Visual Studio. Alternatively, install the tools individually with winget:
+
+```powershell
+winget install Kitware.CMake
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+All other dependencies (SDL2, ImGui, ImGui Node Editor, nlohmann/json) are downloaded automatically by CMake — there is nothing else to install.
+
+Then pick whichever path you prefer (easiest first):
+
+1. **Open in Visual Studio (no command line):** `File → Open → Folder...` and select the cloned repo. Visual Studio reads `CMakePresets.json`, configures automatically, then build with `Build → Build All`.
+2. **One command:** from the repo root, run the bootstrap script. It checks your toolchain, tells you exactly what to install if something is missing, then builds:
+   ```powershell
+   ./build.ps1
+   ```
+3. **Manual CMake presets:**
+   ```powershell
+   cmake --preset windows
+   cmake --build --preset windows
+   ```
+
+The resulting `ficsit-companion.exe` lands in `build/ficsit-companion/Release/`.
+
+### Linux / macOS
+
 ```bash
 git clone https://github.com/adepierre/ficsit-companion.git
 cd ficsit-companion
@@ -85,15 +115,16 @@ cmake -DCMAKE_BUILD_TYPE=Release -S .. -B .
 cmake --build . --config Release
 ```
 
-To build the web version locally you'll need to first install emscripten. Web version will be located inside ``build/web``
+### Web
+
+To build the web version locally you'll need to first install [emscripten](https://emscripten.org/) and have [Ninja](https://ninja-build.org/) on your PATH. The web version will be located inside ``build/web``.
+
 ```bash
 git clone https://github.com/adepierre/ficsit-companion.git
 cd ficsit-companion
-mkdir build
-cd build
-/path/to/emscripten/emsdk activate latest
-emcmake cmake -DCMAKE_BUILD_TYPE=Release -S .. -B .
-cmake --build . --config Release
+/path/to/emscripten/emsdk activate latest   # sets the EMSDK environment variable
+cmake --preset emscripten
+cmake --build --preset emscripten
 ```
 
 ## Updating

@@ -1,0 +1,44 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows",
+      "displayName": "Windows (Visual Studio, Release)",
+      "description": "Desktop build with MSVC, statically-linked runtime to match released binaries. Uses your newest installed Visual Studio.",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
+      }
+    },
+    {
+      "name": "emscripten",
+      "displayName": "Web (Emscripten, Release)",
+      "description": "WebAssembly build. Requires `emsdk activate` first (sets EMSDK) and Ninja on PATH.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows",
+      "displayName": "Windows (Release)",
+      "configurePreset": "windows",
+      "configuration": "Release"
+    },
+    {
+      "name": "emscripten",
+      "displayName": "Web (Release)",
+      "configurePreset": "emscripten"
+    }
+  ]
+}

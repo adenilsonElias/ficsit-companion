@@ -17,21 +17,27 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui_node_editor)
 
-set(imgui_SOURCE  
+# Core imgui + node-editor sources — no SDL/OpenGL backends required.
+# Used by both the app executable and the headless fc-tests target.
+set(imgui_core_SOURCE
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
-    
+
+    # Node-editor extension
+    ${imgui_node_editor_SOURCE_DIR}/crude_json.cpp
+    ${imgui_node_editor_SOURCE_DIR}/imgui_canvas.cpp
+    ${imgui_node_editor_SOURCE_DIR}/imgui_node_editor.cpp
+    ${imgui_node_editor_SOURCE_DIR}/imgui_node_editor_api.cpp
+)
+
+# Full imgui sources including SDL2 + OpenGL backends (app executable only).
+set(imgui_SOURCE
+    ${imgui_core_SOURCE}
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
-
-	#Add Node-Editor extension
-	${imgui_node_editor_SOURCE_DIR}/crude_json.cpp
-	${imgui_node_editor_SOURCE_DIR}/imgui_canvas.cpp
-	${imgui_node_editor_SOURCE_DIR}/imgui_node_editor.cpp
-	${imgui_node_editor_SOURCE_DIR}/imgui_node_editor_api.cpp
 )
 set(imgui_INCLUDE_FOLDERS
     ${imgui_SOURCE_DIR}

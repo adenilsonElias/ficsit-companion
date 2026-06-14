@@ -10,6 +10,11 @@ if (NOT DEFINED EMSCRIPTEN)
 
     # SDL2
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/sdl2.cmake")
+
+    # Catch2 (desktop-only test framework). Provides Catch2::Catch2WithMain,
+    # which the ficsit-companion subdirectory's fc-tests target is gated on.
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/catch2.cmake")
+    enable_testing()
 endif ()
 
 # Imgui

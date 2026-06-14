@@ -57,6 +57,9 @@ jobs:
       - name: Build
         run: cmake --build ${{ github.workspace }}/build --config Release --parallel 2
 
+      - name: Test
+        run: ctest --test-dir ${{ github.workspace }}/build -C Release --output-on-failure
+
       - name: Install
         run: cmake --install ${{ github.workspace }}/build --config Release --prefix ${{ github.workspace }}/build/install/${{ github.event.repository.name }}
 
