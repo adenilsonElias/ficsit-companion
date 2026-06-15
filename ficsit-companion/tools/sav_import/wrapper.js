@@ -5,9 +5,11 @@
  * Reads a Satisfactory 1.2 .sav file, parses it with
  * @etothepii/satisfactory-file-parser, classifies each placed building as
  * one of {manufacturer, miner, splitter, smart_splitter, prog_splitter,
- * merger, sink}, collapses chained conveyor poles into single belts, and
- * writes the result as JSON to stdout in the schema documented in the
- * project plan.
+ * merger, sink, storage, truck_station, train_station}. Generator actors are
+ * resolved to manufacturer entries with Power (...) recipes when their active
+ * fuel is known. The adapter then collapses chained conveyor poles into single
+ * belts and writes the result as JSON to stdout in the schema documented in
+ * the project plan.
  *
  * Usage:
  *   node wrapper.js <path/to/Save.sav>     -> writes JSON to stdout
@@ -19,6 +21,13 @@
 const fs = require("fs");
 const path = require("path");
 const BeltCore = require("./wrapper_core");
+const {
+    stripClassWrap,
+    firstInventoryItem,
+    classifyGeneratorClass,
+    generatorRecipeForFuel,
+    resolveGeneratorFuelItem,
+} = BeltCore;
 
 function die(msg) {
     process.stderr.write("[sav-import] " + msg + "\n");
@@ -95,13 +104,8 @@ function splitCamel(s) {
         .trim();
 }
 
-function stripClassWrap(cls) {
-    // Drop trailing object-path noise (e.g. "/Game/.../Recipe_X.Recipe_X_C" -> "Recipe_X_C")
-    const dotIdx = cls.lastIndexOf(".");
-    let s = dotIdx >= 0 ? cls.substring(dotIdx + 1) : cls;
-    if (s.endsWith("_C")) s = s.substring(0, s.length - 2);
-    return s;
-}
+// stripClassWrap is shared from wrapper_core (single source of truth for the
+// class-path/_C suffix rule).
 
 function recipeDisplayName(recipeClass) {
     if (!recipeClass) return "";
@@ -126,23 +130,10 @@ function itemDisplayName(itemClass) {
 // component is missing or empty. Used to learn a station's fuel/cargo item, which
 // the save records as inventory contents rather than as a connector flag.
 function stationInventoryItem(entity, componentSuffix, objectsByPath) {
-    const comps = entity.components || entity.Components || [];
-    for (const ref of comps) {
-        const cp = objectRefPath(ref);
-        if (!cp || cp.split(".").pop() !== componentSuffix) continue;
-        const c = findObjectByRefPaths(objectsByPath, [cp]);
-        const stacks = c && c.properties && c.properties.mInventoryStacks;
-        const vals = stacks && (stacks.values || stacks.value);
-        if (!Array.isArray(vals)) return "";
-        for (const stack of vals) {
-            const ir = stack && stack.properties && stack.properties.Item
-                && stack.properties.Item.value && stack.properties.Item.value.itemReference;
-            const path = ir && ir.pathName;
-            if (path) return itemDisplayName(path);
-        }
-        return "";
-    }
-    return "";
+    // Shared with generator fuel resolution: firstInventoryItem handles the same
+    // lookup but tolerates more parser casings (.Value / .Properties / uppercase
+    // PathName), so a parser shape change is fixed in one place for both callers.
+    return firstInventoryItem(entity, componentSuffix, objectsByPath, itemDisplayName);
 }
 
 // Raw resource class -> assets/satisfactory.json display name. The Desc_ class
@@ -162,6 +153,13 @@ const ITEM_DISPLAY_OVERRIDES = {
     "Desc_LiquidOil":    "Crude Oil",
     "Desc_Water":        "Water",
     "Desc_NitrogenGas":  "Nitrogen Gas",
+    // Generator fuel descriptors whose stripped/split name differs from the
+    // recipe item name used by the Power (...) recipe map.
+    "Desc_Biofuel":         "Solid Biofuel",
+    "Desc_LiquidFuel":      "Fuel",
+    "Desc_LiquidTurboFuel": "Turbofuel",
+    "Desc_PackagedBiofuel": "Packaged Liquid Biofuel",
+    "Desc_NuclearFuelRod":  "Uranium Fuel Rod",
 };
 
 // Build_MinerMkN_C / pumps -> { extractor_kind, default_resource_or_empty }.
@@ -295,6 +293,8 @@ function classifyBuilding(buildingClass) {
         s.startsWith("Build_RailroadStation") ||
         s.startsWith("Build_TrainDockingStation") ||
         s.startsWith("Build_TrainPlatform")) return "train_station";
+    const generatorKind = classifyGeneratorClass(s);
+    if (generatorKind) return generatorKind;
     if (s.startsWith("Build_ConveyorAttachmentSplitterSmart")) return "smart_splitter";
     if (s.startsWith("Build_ConveyorAttachmentSplitterProgrammable")) return "prog_splitter";
     if (s.startsWith("Build_ConveyorAttachmentSplitter")) return "splitter";
@@ -560,8 +560,10 @@ const floorHoleActors = actors.filter(a => {
 const floorHolePeerByConnection = BeltCore.buildFloorHolePeerMap(floorHoleActors);
 
 const buildings = [];      // emitted
+const warnings = [];
 const fuelConnByStation = new Map(); // station id -> fuel connector suffix (e.g. "Input2")
 let beltSegmentCount = 0;
+let stationsMissingLoadMode = 0; // stations with no mIsInLoadMode flag (assumed Load)
 
 for (const a of actors) {
     const cls = a.className || a.ClassName || a.typePath || "";
@@ -634,7 +636,22 @@ for (const a of actors) {
         entry.fuel_item = stationInventoryItem(a, "FuelInventory", objectsByPath);
         entry.cargo_item = stationInventoryItem(a, "inventory", objectsByPath);
         const loadModeProp = a.properties && a.properties.mIsInLoadMode;
+        // mIsInLoadMode is delta-serialized; when absent we assume Load mode.
+        // Count these so a misclassified station direction isn't fully silent.
+        if (!loadModeProp) stationsMissingLoadMode += 1;
         entry.is_unloader = loadModeProp ? loadModeProp.value === false : false;
+    }
+
+    if (kind === "generator") {
+        const fuelItem = resolveGeneratorFuelItem(a, objectsByPath, itemDisplayName);
+        const generatorRecipe = generatorRecipeForFuel(fuelItem);
+        if (!generatorRecipe) {
+            warnings.push("Skipping generator " + id + ": unresolved fuel recipe");
+            continue;
+        }
+        entry.kind = "manufacturer";
+        entry.recipe_name = generatorRecipe;
+        entry.item_name = "";
     }
 
     buildings.push(entry);
@@ -790,7 +807,6 @@ function followBeltChain(startCompPath) {
 }
 
 const belts = [];
-const warnings = [];
 let beltsEmitted = 0;
 let beltsDropped = 0;
 let beltsOutOfScope = 0;
@@ -917,6 +933,10 @@ warnings.push("[debug] miners: "
     + minersWithResource + " with resolved resource | "
     + minersWithComps + " with components | "
     + minerEdgesEmitted + " belt edges out");
+if (stationsMissingLoadMode > 0) {
+    warnings.push(stationsMissingLoadMode + " station(s) had no mIsInLoadMode flag; "
+        + "assumed Load mode — verify their load/unload direction after import");
+}
 
 // Diagnostic: count emitted edges by (src_class, src_port) and (dst_class, dst_port).
 // Helps identify whether high port indices are coming from a specific building

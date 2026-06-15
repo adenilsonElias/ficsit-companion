@@ -7,11 +7,13 @@
 #include "domain/node.hpp"
 #include "domain/pin.hpp"
 #include "domain/recipe.hpp"
+#include "domain/vehicle_route.hpp"
 #include "app/utils.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <mutex>
 #include <set>
 #include <unordered_map>
@@ -902,10 +904,10 @@ namespace SavImport
                 LogisticsNode::Kind kind = LogisticsNode::Kind::Storage;
                 int default_cargo_inputs = 1;
                 int default_cargo_outputs = 1;
-                // Truck/Train stations expose a dedicated fuel inlet on top of
-                // their cargo belts. We always allocate the fuel pin so the
-                // editor shows the slot even when the player hasn't piped fuel
-                // in yet; fuel-role belts get routed to it explicitly below.
+                // Truck/Train stations are built as VehicleStationNode, which
+                // allocates its own fuel inlet (last input) and vehicle plug in
+                // its constructor; fuel-role belts are still routed to that
+                // fuel inlet below. Other logistics kinds use LogisticsNode.
                 bool has_fuel_input_pin = false;
                 if (b.kind == BuildingKind::IndustrialStorage)
                 {
@@ -918,17 +920,12 @@ namespace SavImport
                     kind = b.kind == BuildingKind::TruckStation
                         ? LogisticsNode::Kind::TruckStation
                         : LogisticsNode::Kind::TrainStation;
-                    // Stations physically expose several cargo connectors (the
-                    // blueprint pattern wires belts to all of them and leaves the
-                    // unused ones dead-ending). Allocating a fixed 2 in / 2 out
-                    // left those unused connectors as empty "dead-end" pins on the
-                    // node. Instead allocate purely from the connectors that carry
-                    // a real belt (observed ports below); the LogisticsNode floor
-                    // keeps a single cargo pin per side so the node stays usable,
-                    // and the vehicle-route step grows a pin if it needs one.
-                    default_cargo_inputs = 0;
-                    default_cargo_outputs = 0;
-                    has_fuel_input_pin = true;
+                    // Stations physically expose 2 cargo inputs, 1 fuel input,
+                    // and 2 cargo outputs. Keep that full layout even when the
+                    // save only has belts on some connectors; otherwise imported
+                    // stations render with missing pins.
+                    default_cargo_inputs = 2;
+                    default_cargo_outputs = 2;
                 }
                 else if (b.kind == BuildingKind::DimensionalDepot)
                 {
@@ -941,11 +938,25 @@ namespace SavImport
                 }
                 const int cargo_in = static_cast<int>(observed_in_ports[b.id].size());
                 const int cargo_out = static_cast<int>(observed_out_ports[b.id].size());
-                const size_t total_in = static_cast<size_t>(std::max(default_cargo_inputs, cargo_in))
-                    + (has_fuel_input_pin ? 1u : 0u);
-                const size_t total_out = static_cast<size_t>(std::max(default_cargo_outputs, cargo_out));
-                node = std::make_unique<LogisticsNode>(id_generator(), kind,
-                    total_in, total_out, id_generator);
+                const size_t resolved_cargo_in = static_cast<size_t>(std::max(default_cargo_inputs, cargo_in));
+                const size_t resolved_cargo_out = static_cast<size_t>(std::max(default_cargo_outputs, cargo_out));
+                if (kind == LogisticsNode::Kind::TruckStation || kind == LogisticsNode::Kind::TrainStation)
+                {
+                    // Stations are VehicleStationNode: a Load/Unload mode + a
+                    // vehicle plug. Mode comes from the save (mIsInLoadMode).
+                    // The constructor appends the fuel inlet as the last input.
+                    const auto mode = b.is_unloader
+                        ? VehicleStationNode::Mode::Unload
+                        : VehicleStationNode::Mode::Load;
+                    node = std::make_unique<VehicleStationNode>(id_generator(), kind, mode,
+                        resolved_cargo_in, resolved_cargo_out, id_generator);
+                }
+                else
+                {
+                    const size_t total_in = resolved_cargo_in + (has_fuel_input_pin ? 1u : 0u);
+                    node = std::make_unique<LogisticsNode>(id_generator(), kind,
+                        total_in, resolved_cargo_out, id_generator);
+                }
                 break;
             }
             case BuildingKind::Unknown:
@@ -1409,156 +1420,76 @@ namespace SavImport
         }
 
         // ---- Step: vehicle route links (opt-in) ----
-        // Wire each recorded vehicle route as station→station transport edges.
-        // A station that a factory belt FEEDS is a loader (cargo goes out on the
-        // truck); a station that FEEDS a factory belt is an unloader (the truck
-        // brought cargo in). We connect a loader's free output pin to an
-        // unloader's free input pin, carrying the item/rate already resolved on
-        // the belt side. Conservative: legs with no spare pin or a clashing item
-        // are skipped and reported rather than forced. Inserted before the rate
-        // passes so the new edges propagate like any other link.
+        // Wire each recorded vehicle route as plug<->plug route links.
+        // A Load station's plug is an Output; an Unload station's plug is an
+        // Input. Links go loader.plug -> unloader.plug. Pin::link is left null
+        // on plugs; the link is recorded only in each station's route_links
+        // (matches the modeler). Rate balancing across the route pool is a
+        // separate pass (Task 5) and is NOT done here.
         if (options.connect_vehicle_routes && !parsed.vehicle_routes.empty())
         {
-            auto is_station_node = [](const Node* n) {
-                if (n == nullptr || !n->IsLogistics()) return false;
-                const LogisticsNode* l = static_cast<const LogisticsNode*>(n);
-                return l->logistics_kind == LogisticsNode::Kind::TruckStation
-                    || l->logistics_kind == LogisticsNode::Kind::TrainStation;
-            };
-
-            struct StationWire
-            {
-                Node* node = nullptr;
-                bool is_loader = false;    // factory belt feeds it (cargo input wired)
-                bool is_unloader = false;  // it feeds a factory belt (cargo output wired)
-                const Item* load_item = nullptr;
-                const Item* unload_item = nullptr;
-                FractionalNumber load_rate{ 0, 1 };
-            };
-
-            // A loader station is a downstream endpoint (cargo leaves on the
-            // truck), so the upstream item-propagation pass never visits it and
-            // its input pin item may still be null. Resolve the carried item by
-            // walking UP from the input pin to the first typed producer pin
-            // (organizer items have been stamped by the passes above).
-            auto resolve_item_upstream = [](Pin* pin) -> const Item* {
-                std::unordered_set<Pin*> seen;
-                Pin* cur = pin;
-                for (int hop = 0; hop < 64 && cur != nullptr; ++hop)
-                {
-                    if (cur->item != nullptr) return cur->item;
-                    if (cur->link == nullptr) return nullptr;
-                    Pin* up = cur->link->start;
-                    if (up == nullptr || !seen.insert(up).second) return nullptr;
-                    if (up->item != nullptr) return up->item;
-                    Node* n = up->node;
-                    if (n == nullptr) return nullptr;
-                    Pin* next = nullptr;
-                    for (const auto& q : n->ins) { if (q->link != nullptr) { next = q.get(); break; } }
-                    cur = next;
-                }
-                return nullptr;
-            };
-
-            std::unordered_map<std::string, StationWire> wires;
+            // Map each logistics-block station id to its VehicleStationNode.
+            std::unordered_map<std::string, VehicleStationNode*> stations;
             for (const LogisticsStation& ls : parsed.logistics_stations)
             {
                 auto idx = id_to_index.find(ls.id);
                 if (idx == id_to_index.end()) continue;
                 Node* node = out.nodes[idx->second].get();
-                if (!is_station_node(node)) continue;
-                StationWire w;
-                w.node = node;
-                for (const auto& p : node->ins)
-                {
-                    if (IsStationFuelPin(node, p.get())) continue;
-                    if (p->link != nullptr)
-                    {
-                        w.is_loader = true;
-                        if (w.load_item == nullptr) { w.load_item = resolve_item_upstream(p.get()); w.load_rate = p->current_rate; }
-                    }
-                }
-                for (const auto& p : node->outs)
-                {
-                    if (p->link != nullptr)
-                    {
-                        w.is_unloader = true;
-                        if (w.unload_item == nullptr) w.unload_item = p->item;
-                    }
-                }
-                wires[ls.id] = w;
+                if (auto* v = dynamic_cast<VehicleStationNode*>(node)) stations[ls.id] = v;
             }
 
-            // Stations are now allocated with only their connected cargo pins, so
-            // a loader may have no spare output (and an unloader no spare cargo
-            // input) for the vehicle leg. Reuse a free pin if one exists, else
-            // grow one. New cargo inputs are inserted BEFORE the fuel pin so it
-            // stays last (IsStationFuelPin relies on that).
-            auto free_out_pin = [&](Node* n) -> Pin* {
-                for (const auto& p : n->outs) if (p->link == nullptr) return p.get();
-                n->outs.emplace_back(std::make_unique<Pin>(id_generator(), ax::NodeEditor::PinKind::Output, n, nullptr));
-                return n->outs.back().get();
-            };
-            auto free_in_pin = [&](Node* n) -> Pin* {
-                for (const auto& p : n->ins)
-                {
-                    if (IsStationFuelPin(n, p.get())) continue;
-                    if (p->link == nullptr) return p.get();
-                }
-                auto pin = std::make_unique<Pin>(id_generator(), ax::NodeEditor::PinKind::Input, n, nullptr);
-                Pin* raw = pin.get();
-                if (!n->ins.empty()) n->ins.insert(n->ins.end() - 1, std::move(pin)); // keep fuel pin last
-                else n->ins.push_back(std::move(pin));
-                return raw;
-            };
-
+            // Pair every loader's plug (Output) with every unloader's plug (Input);
+            // complete bipartite within a route keeps the whole route in one pool.
             std::set<std::pair<const void*, const void*>> created;
-            size_t route_links = 0, legs_no_pin = 0, legs_item_mismatch = 0;
-
+            size_t route_links_made = 0;
+            size_t routes_unpaired = 0;
             for (const std::vector<std::string>& route : parsed.vehicle_routes)
             {
-                std::vector<StationWire*> loaders, unloaders;
+                std::vector<VehicleStationNode*> loaders, unloaders;
                 for (const std::string& sid : route)
                 {
-                    auto it = wires.find(sid);
-                    if (it == wires.end()) continue;
-                    if (it->second.is_loader) loaders.push_back(&it->second);
-                    if (it->second.is_unloader) unloaders.push_back(&it->second);
+                    auto it = stations.find(sid);
+                    if (it == stations.end()) continue;
+                    if (it->second->mode == VehicleStationNode::Mode::Load) loaders.push_back(it->second);
+                    else unloaders.push_back(it->second);
                 }
-                for (StationWire* loader : loaders)
+                // A route whose resolved stations all sit on the same side can't
+                // form a loader->unloader pool; count it so a fully-dropped route
+                // set isn't silently invisible.
+                if (loaders.empty() != unloaders.empty()) routes_unpaired += 1;
+                for (VehicleStationNode* loader : loaders)
                 {
-                    for (StationWire* unloader : unloaders)
+                    for (VehicleStationNode* unloader : unloaders)
                     {
-                        if (loader == unloader || loader->node == unloader->node) continue;
-                        const Item* item = loader->load_item;
-                        if (item == nullptr) continue; // can't type the leg
-                        if (unloader->unload_item != nullptr && unloader->unload_item != item)
-                        {
-                            legs_item_mismatch += 1;
-                            continue;
-                        }
+                        if (loader == unloader) continue;
                         const auto key = std::make_pair(
-                            static_cast<const void*>(loader->node), static_cast<const void*>(unloader->node));
+                            static_cast<const void*>(loader), static_cast<const void*>(unloader));
                         if (!created.insert(key).second) continue;
-                        Pin* op = free_out_pin(loader->node);
-                        Pin* ip = free_in_pin(unloader->node);
-                        if (op == nullptr || ip == nullptr) { legs_no_pin += 1; continue; }
-                        op->item = item;
-                        ip->item = item;
-                        op->current_rate = loader->load_rate;
-                        ip->current_rate = loader->load_rate;
-                        out.links.emplace_back(std::make_unique<Link>(id_generator(), op, ip));
-                        op->link = out.links.back().get();
-                        ip->link = out.links.back().get();
-                        route_links += 1;
+                        out.links.emplace_back(std::make_unique<Link>(
+                            id_generator(), loader->plug.get(), unloader->plug.get()));
+                        Link* rl = out.links.back().get();
+                        loader->route_links.push_back(rl);
+                        unloader->route_links.push_back(rl);
+                        route_links_made += 1;
                     }
                 }
             }
 
-            std::string msg = "[vehicle routes] " + std::to_string(route_links) + " station link(s) created";
-            if (legs_no_pin > 0) msg += ", " + std::to_string(legs_no_pin) + " leg(s) skipped (no free pin)";
-            if (legs_item_mismatch > 0) msg += ", " + std::to_string(legs_item_mismatch) + " leg(s) skipped (item mismatch)";
-            out.warnings.push_back(msg);
+            if (route_links_made > 0)
+            {
+                out.warnings.push_back("[vehicle routes] " + std::to_string(route_links_made)
+                    + " station link(s) created");
+            }
+            else if (!parsed.vehicle_routes.empty())
+            {
+                out.warnings.push_back("[vehicle routes] no station links created from "
+                    + std::to_string(parsed.vehicle_routes.size()) + " recorded route(s)");
+            }
+            if (routes_unpaired > 0)
+            {
+                out.warnings.push_back("[vehicle routes] " + std::to_string(routes_unpaired)
+                    + " route(s) skipped: all resolved stations on the same load/unload side");
+            }
         }
 
         // Forward-propagate rates from producers (CraftNode/Extractor outputs
@@ -1773,6 +1704,42 @@ namespace SavImport
                 }
             }
             if (!changed) break;
+        }
+
+        // ---- Step: balance imported vehicle route pools ----
+        // Now that loaders carry their cargo-input rate (filled above), settle
+        // each route pool the way the interactive editor does on connect:
+        // carry cargo items across the pool, then run the route solver seeded
+        // from a member's live cargo pin. Best-effort: a rejected/over-
+        // constrained solve is caught and leaves links + rates intact.
+        if (options.connect_vehicle_routes)
+        {
+            std::unordered_set<VehicleStationNode*> visited;
+            float import_error_time = 0.0f;
+            size_t pools_rejected = 0;
+            for (auto& node_ptr : out.nodes)
+            {
+                auto* v = dynamic_cast<VehicleStationNode*>(node_ptr.get());
+                if (v == nullptr || v->route_links.empty()) continue;
+                if (!visited.insert(v).second) continue;
+                std::vector<VehicleStationNode*> pool = VehicleRoute::FindPool(v);
+                for (VehicleStationNode* member : pool) visited.insert(member);
+                try
+                {
+                    if (!VehicleRoute::SyncRoutePool(out.nodes, out.links, pool, import_error_time, 0.0f))
+                        pools_rejected += 1;
+                }
+                catch (const std::runtime_error& e)
+                {
+                    fprintf(stderr, "[vehicle routes] route pool solve failed: %s\n", e.what());
+                    pools_rejected += 1;
+                }
+            }
+            if (pools_rejected > 0)
+            {
+                out.warnings.push_back("[vehicle routes] " + std::to_string(pools_rejected)
+                    + " route pool(s) could not be balanced (left unbalanced)");
+            }
         }
 
         // Verify every connection: both endpoints equal == the editor draws it

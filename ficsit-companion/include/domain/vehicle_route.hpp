@@ -1,9 +1,12 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include "domain/fractional_number.hpp"
 
+struct Node;
+struct Link;
 struct VehicleStationNode;
 struct Item;
 struct Pin;
@@ -44,4 +47,20 @@ namespace VehicleRoute
 
     /// @brief Per-cargo-item supply (loaders) vs demand (unloaders) over a pool.
     std::vector<ItemBalance> SummarizePool(const std::vector<VehicleStationNode*>& pool);
+
+    /// @brief Re-solve a route pool, seeding from a pool member's active cargo
+    /// pin that already carries a non-zero rate. Returns false only if a solve
+    /// ran and was rejected; returns true when the pool carries no rate yet.
+    bool ResolveRoutePool(std::vector<std::unique_ptr<Node>>& nodes,
+                          std::vector<std::unique_ptr<Link>>& links,
+                          const std::vector<VehicleStationNode*>& pool,
+                          float& error_time, float error_flow_duration);
+
+    /// @brief Carry cargo item types across a route pool (PropagateCargoItems),
+    /// then re-balance it (ResolveRoutePool). Returns false only if the balance
+    /// solve was rejected.
+    bool SyncRoutePool(std::vector<std::unique_ptr<Node>>& nodes,
+                       std::vector<std::unique_ptr<Link>>& links,
+                       const std::vector<VehicleStationNode*>& pool,
+                       float& error_time, float error_flow_duration);
 }

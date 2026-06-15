@@ -13,49 +13,6 @@
 #include <cstdio>
 #include <stdexcept>
 
-namespace
-{
-    // Re-solve a vehicle route pool, seeding from a pool member's active cargo
-    // pin that already carries a rate (so the pool settles around an existing
-    // value). Returns false only if a solve ran and was rejected. Does nothing
-    // (returns true) when the pool carries no rate yet — nothing to balance.
-    bool ResolveRoutePool(std::vector<std::unique_ptr<Node>>& nodes,
-                          std::vector<std::unique_ptr<Link>>& links,
-                          const std::vector<VehicleStationNode*>& pool,
-                          float& error_time, float error_flow_duration)
-    {
-        for (VehicleStationNode* s : pool)
-        {
-            for (const auto& p : s->ins)
-            {
-                if (IsActiveCargoPin(p.get()) && p->item != nullptr && p->current_rate.GetNumerator() != 0)
-                {
-                    return RateSolver::Solve(nodes, links, p.get(), p->current_rate, error_time, error_flow_duration);
-                }
-            }
-            for (const auto& p : s->outs)
-            {
-                if (IsActiveCargoPin(p.get()) && p->item != nullptr && p->current_rate.GetNumerator() != 0)
-                {
-                    return RateSolver::Solve(nodes, links, p.get(), p->current_rate, error_time, error_flow_duration);
-                }
-            }
-        }
-        return true;
-    }
-
-    // Carry cargo item types across a route pool, then re-balance it. Returns
-    // false only if the balance solve was rejected.
-    bool SyncRoutePool(std::vector<std::unique_ptr<Node>>& nodes,
-                       std::vector<std::unique_ptr<Link>>& links,
-                       const std::vector<VehicleStationNode*>& pool,
-                       float& error_time, float error_flow_duration)
-    {
-        VehicleRoute::PropagateCargoItems(pool);
-        return ResolveRoutePool(nodes, links, pool, error_time, error_flow_duration);
-    }
-}
-
 GraphModel::GraphModel(IEditorBackend& editor) : editor(editor)
 {
 }
@@ -132,7 +89,7 @@ void GraphModel::CreateLink(Pin* start, Pin* end, bool trigger_update, float& er
         {
             try
             {
-                if (!SyncRoutePool(nodes, links, VehicleRoute::FindPool(s_start), error_time, error_flow_duration))
+                if (!VehicleRoute::SyncRoutePool(nodes, links, VehicleRoute::FindPool(s_start), error_time, error_flow_duration))
                 {
                     DeleteLink(created->id);
                     return;
@@ -242,7 +199,7 @@ void GraphModel::CreateLink(Pin* start, Pin* end, bool trigger_update, float& er
             if (pool.size() < 2) return; // not connected to another station
             try
             {
-                SyncRoutePool(nodes, links, pool, error_time, error_flow_duration);
+                VehicleRoute::SyncRoutePool(nodes, links, pool, error_time, error_flow_duration);
             }
             catch (const std::runtime_error&)
             {
@@ -310,8 +267,8 @@ void GraphModel::DeleteLink(ax::NodeEditor::LinkId id)
             float error_time = 0.0f;
             try
             {
-                ResolveRoutePool(nodes, links, VehicleRoute::FindPool(end_a), error_time, editor.GetFlowDuration());
-                ResolveRoutePool(nodes, links, VehicleRoute::FindPool(end_b), error_time, editor.GetFlowDuration());
+                VehicleRoute::ResolveRoutePool(nodes, links, VehicleRoute::FindPool(end_a), error_time, editor.GetFlowDuration());
+                VehicleRoute::ResolveRoutePool(nodes, links, VehicleRoute::FindPool(end_b), error_time, editor.GetFlowDuration());
             }
             catch (const std::runtime_error&)
             {

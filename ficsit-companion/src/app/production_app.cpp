@@ -504,6 +504,43 @@ void ProductionApp::UngroupSelectedNode()
         links_created += 1;
     }
 
+    // Reconstruct vehicle route (plug<->plug) links so ungrouping preserves
+    // them. CreateLink handles route_links bookkeeping and keeps Pin::link null.
+    auto station_plug = [](Node* n) -> Pin* {
+        if (n == nullptr || !n->IsLogistics()) return nullptr;
+        auto* lg = static_cast<LogisticsNode*>(n);
+        if (lg->logistics_kind != LogisticsNode::Kind::TruckStation &&
+            lg->logistics_kind != LogisticsNode::Kind::TrainStation) return nullptr;
+        return static_cast<VehicleStationNode*>(lg)->plug.get();
+    };
+    if (serialized.contains("route_links"))
+    {
+        for (const auto& l : serialized["route_links"].get_array())
+        {
+            const int s_idx = l["start"].get<int>();
+            const int e_idx = l["end"].get<int>();
+            if (s_idx < 0 || s_idx >= static_cast<int>(serialized_index_to_main_index.size()) ||
+                e_idx < 0 || e_idx >= static_cast<int>(serialized_index_to_main_index.size()) ||
+                serialized_index_to_main_index[s_idx] == -1 ||
+                serialized_index_to_main_index[e_idx] == -1)
+            {
+                links_skipped += 1;
+                continue;
+            }
+
+            Pin* start_plug = station_plug(nodes[serialized_index_to_main_index[s_idx]].get());
+            Pin* end_plug = station_plug(nodes[serialized_index_to_main_index[e_idx]].get());
+            if (start_plug == nullptr || end_plug == nullptr)
+            {
+                links_skipped += 1;
+                continue;
+            }
+
+            CreateLink(start_plug, end_plug, false);
+            links_created += 1;
+        }
+    }
+
     if (deserialize_failures > 0 || links_skipped > 0)
     {
         fprintf(stderr, "[ungroup] %d node(s) failed to deserialize, %d link(s) skipped, %d link(s) created\n",
@@ -1941,13 +1978,19 @@ void ProductionApp::RenderNodes()
                                     cursor_pos.x + radius,
                                     cursor_pos.y + radius
                                 );
+                                // The dedicated fuel inlet on a Truck/Train station
+                                // reads in the same orange as the vehicle plug so it
+                                // is visually distinct from cargo belts.
+                                const ImColor pin_outline = IsFuelPin(p.get())
+                                    ? ImColor(255, 170, 0)
+                                    : ImColor(1.0f, 1.0f, 1.0f);
                                 if (p->link == nullptr)
                                 {
-                                    draw_list->AddCircle(center, radius, ImColor(1.0f, 1.0f, 1.0f));
+                                    draw_list->AddCircle(center, radius, pin_outline);
                                 }
                                 else
                                 {
-                                    draw_list->AddCircleFilled(center, radius, ImColor(1.0f, 1.0f, 1.0f));
+                                    draw_list->AddCircleFilled(center, radius, pin_outline);
                                 }
                             }
                             ImGui::Dummy(size);

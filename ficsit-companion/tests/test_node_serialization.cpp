@@ -5,12 +5,14 @@
 #include "domain/recipe.hpp"
 #include "domain/building.hpp"
 #include "domain/json.hpp"
+#include "domain/link.hpp"
 
 #include "graph_test_helpers.hpp" // IdGen
 
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -152,6 +154,54 @@ TEST_CASE("Group node round-trips, recursing the resolver through subnodes", "[n
     REQUIRE(rebuilt_group->nodes.size() == 2);   // subnodes recreated via the recursive resolver
     REQUIRE(rebuilt_group->links.size() == 1);   // internal link rebuilt
     REQUIRE(group.Serialize().Dump() == rebuilt->Serialize().Dump());
+}
+
+/// @test A GroupNode containing a plug<->plug vehicle route link round-trips
+///       through Serialize/Deserialize with the route link preserved.
+/// @covers GroupNode route-link serialization.
+TEST_CASE("GroupNode round-trips vehicle route links", "[group][vehicle_route]")
+{
+    IdGen idgen;
+    FakeNodeDataResolver resolver;
+
+    std::vector<std::unique_ptr<Node>> subnodes;
+    subnodes.push_back(std::make_unique<VehicleStationNode>(
+        ax::NodeEditor::NodeId(idgen()), LogisticsNode::Kind::TruckStation, [&idgen] { return idgen(); }));
+    subnodes.push_back(std::make_unique<VehicleStationNode>(
+        ax::NodeEditor::NodeId(idgen()), LogisticsNode::Kind::TruckStation, [&idgen] { return idgen(); }));
+
+    auto* loader = static_cast<VehicleStationNode*>(subnodes[0].get());
+    auto* unloader = static_cast<VehicleStationNode*>(subnodes[1].get());
+    unloader->SetMode(VehicleStationNode::Mode::Unload, [&idgen] { return idgen(); });
+
+    std::vector<std::unique_ptr<Link>> sublinks;
+    sublinks.emplace_back(std::make_unique<Link>(
+        ax::NodeEditor::LinkId(idgen()), loader->plug.get(), unloader->plug.get()));
+    Link* route_link = sublinks.back().get();
+    loader->route_links.push_back(route_link);
+    unloader->route_links.push_back(route_link);
+
+    GroupNode group(ax::NodeEditor::NodeId(idgen()), [&idgen] { return idgen(); },
+        std::move(subnodes), std::move(sublinks));
+
+    const Json::Value original = group.Serialize();
+    std::unique_ptr<Node> rebuilt = Node::Deserialize(
+        ax::NodeEditor::NodeId(idgen()), [&idgen] { return idgen(); }, original, resolver);
+
+    REQUIRE(rebuilt->GetKind() == Node::Kind::Group);
+    auto* rebuilt_group = static_cast<GroupNode*>(rebuilt.get());
+    REQUIRE(rebuilt_group->nodes.size() == 2);
+    REQUIRE(rebuilt_group->links.size() == 1);
+
+    auto* rebuilt_loader = static_cast<VehicleStationNode*>(rebuilt_group->nodes[0].get());
+    auto* rebuilt_unloader = static_cast<VehicleStationNode*>(rebuilt_group->nodes[1].get());
+    REQUIRE(rebuilt_loader->route_links.size() == 1);
+    REQUIRE(rebuilt_unloader->route_links.size() == 1);
+    REQUIRE(rebuilt_loader->route_links[0] == rebuilt_unloader->route_links[0]);
+    REQUIRE(rebuilt_loader->route_links[0]->start == rebuilt_loader->plug.get());
+    REQUIRE(rebuilt_loader->route_links[0]->end == rebuilt_unloader->plug.get());
+    REQUIRE(rebuilt_loader->plug->link == nullptr);
+    REQUIRE(rebuilt_unloader->plug->link == nullptr);
 }
 
 /// @test   An ExtractorNode (MinerMk2, Pure purity, extracting an item) round-trips to identical JSON.

@@ -4,6 +4,7 @@
 #include "domain/link.hpp"
 #include "domain/node.hpp"
 #include "domain/pin.hpp"
+#include "domain/rate_solver.hpp"
 #include "domain/recipe.hpp"
 
 #include <unordered_set>
@@ -183,5 +184,39 @@ namespace VehicleRoute
                 fill_uniform(s->outs, false);
             }
         }
+    }
+
+    bool ResolveRoutePool(std::vector<std::unique_ptr<Node>>& nodes,
+                          std::vector<std::unique_ptr<Link>>& links,
+                          const std::vector<VehicleStationNode*>& pool,
+                          float& error_time, float error_flow_duration)
+    {
+        // A pool can carry several distinct cargo items (e.g. a train dropping
+        // Coal at one stop and Iron Ore at another). Each item flows on its own
+        // pins, so seed and solve once per distinct item rather than returning
+        // after the first — otherwise every item but the first stays unbalanced.
+        bool ok = true;
+        std::unordered_set<const Item*> solved;
+        auto try_solve = [&](Pin* p) {
+            if (!IsActiveCargoPin(p) || p->item == nullptr || p->current_rate.GetNumerator() == 0) return;
+            if (!solved.insert(p->item).second) return; // already solved this item
+            if (!RateSolver::Solve(nodes, links, p, p->current_rate, error_time, error_flow_duration))
+                ok = false;
+        };
+        for (VehicleStationNode* s : pool)
+        {
+            for (const auto& p : s->ins) try_solve(p.get());
+            for (const auto& p : s->outs) try_solve(p.get());
+        }
+        return ok;
+    }
+
+    bool SyncRoutePool(std::vector<std::unique_ptr<Node>>& nodes,
+                       std::vector<std::unique_ptr<Link>>& links,
+                       const std::vector<VehicleStationNode*>& pool,
+                       float& error_time, float error_flow_duration)
+    {
+        PropagateCargoItems(pool);
+        return ResolveRoutePool(nodes, links, pool, error_time, error_flow_duration);
     }
 }

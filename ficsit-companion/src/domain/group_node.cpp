@@ -1,5 +1,6 @@
 #include "domain/building.hpp"
 #include "domain/game_data.hpp"
+#include "domain/graph_item_resolve.hpp"
 #include "domain/link.hpp"
 #include "domain/node.hpp"
 #include "domain/node_data_resolver.hpp"
@@ -79,6 +80,44 @@ GroupNode::GroupNode(const ax::NodeEditor::NodeId id, const std::function<unsign
         end->link = links.back().get();
     }
 
+    // Rebuild route (plug<->plug) links between vehicle stations. Plugs live
+    // outside ins/outs, so route links are stored by node index only.
+    auto station_plug = [](const Node* n) -> Pin* {
+        if (n == nullptr || !n->IsLogistics()) return nullptr;
+        auto* lg = static_cast<const LogisticsNode*>(n);
+        if (lg->logistics_kind != LogisticsNode::Kind::TruckStation &&
+            lg->logistics_kind != LogisticsNode::Kind::TrainStation) return nullptr;
+        return static_cast<const VehicleStationNode*>(lg)->plug.get();
+    };
+    if (serialized.contains("route_links"))
+    {
+        for (const auto& l : serialized["route_links"].get_array())
+        {
+            const int s = l["start"].get<int>();
+            const int e = l["end"].get<int>();
+            if (s < 0 || e < 0 || s >= static_cast<int>(node_indices.size()) ||
+                e >= static_cast<int>(node_indices.size()) ||
+                node_indices[s] == -1 || node_indices[e] == -1)
+            {
+                loading_error = true;
+                continue;
+            }
+
+            Pin* start_plug = station_plug(nodes[node_indices[s]].get());
+            Pin* end_plug = station_plug(nodes[node_indices[e]].get());
+            if (start_plug == nullptr || end_plug == nullptr)
+            {
+                loading_error = true;
+                continue;
+            }
+
+            links.emplace_back(std::make_unique<Link>(local_id_generator(), start_plug, end_plug));
+            Link* route_link = links.back().get();
+            static_cast<VehicleStationNode*>(start_plug->node)->route_links.push_back(route_link);
+            static_cast<VehicleStationNode*>(end_plug->node)->route_links.push_back(route_link);
+        }
+    }
+
     CreateInsOuts(id_generator);
     const bool locked = serialized["locked"].get<bool>();
     for (auto& p : ins)
@@ -143,6 +182,11 @@ Json::Value GroupNode::Serialize() const
     serialized_links.reserve(links.size());
     for (const auto& l : links)
     {
+        if (IsVehiclePlug(l->start) && IsVehiclePlug(l->end))
+        {
+            continue;
+        }
+
         const int start_node_index = get_node_index(l->start->node);
         const int end_node_index = get_node_index(l->end->node);
         const int start_pin_index = get_pin_index(l->start);
@@ -165,6 +209,28 @@ Json::Value GroupNode::Serialize() const
         });
     }
     node["links"] = serialized_links;
+
+    // Route links (plug<->plug) are serialized by node indices only, like
+    // SessionSerializer, because plugs live outside ins/outs.
+    Json::Array serialized_route_links;
+    for (const auto& l : links)
+    {
+        if (!IsVehiclePlug(l->start) || !IsVehiclePlug(l->end))
+        {
+            continue;
+        }
+        const int start_node_index = get_node_index(l->start->node);
+        const int end_node_index = get_node_index(l->end->node);
+        if (start_node_index == -1 || end_node_index == -1)
+        {
+            continue;
+        }
+        serialized_route_links.push_back({
+            { "start", start_node_index },
+            { "end", end_node_index }
+        });
+    }
+    node["route_links"] = serialized_route_links;
 
     return node;
 }

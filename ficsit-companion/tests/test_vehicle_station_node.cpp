@@ -301,6 +301,32 @@ TEST_CASE("GroupPoolByItem omits one-sided items", "[vehicle_station][route]")
     REQUIRE(groups.empty());
 }
 
+/// @test The importer constructor builds the requested cargo pin counts plus a
+///       trailing fuel inlet, and the plug direction follows the given mode.
+/// @covers VehicleStationNode(id, kind, mode, cargo_in, cargo_out, id_generator).
+TEST_CASE("VehicleStationNode importer ctor honors mode and cargo counts", "[vehicle_station]")
+{
+    IdGen idgen;
+    auto gen = [&idgen] { return idgen(); };
+
+    VehicleStationNode loader(ax::NodeEditor::NodeId(idgen()),
+        LogisticsNode::Kind::TruckStation, VehicleStationNode::Mode::Load,
+        /*cargo_in=*/1, /*cargo_out=*/2, gen);
+    REQUIRE(loader.ins.size() == 2);   // 1 cargo + 1 fuel inlet (last)
+    REQUIRE(loader.outs.size() == 2);
+    REQUIRE(loader.mode == VehicleStationNode::Mode::Load);
+    REQUIRE(loader.plug != nullptr);
+    REQUIRE(loader.plug->direction == ax::NodeEditor::PinKind::Output);
+
+    VehicleStationNode unloader(ax::NodeEditor::NodeId(idgen()),
+        LogisticsNode::Kind::TrainStation, VehicleStationNode::Mode::Unload,
+        /*cargo_in=*/0, /*cargo_out=*/1, gen);
+    REQUIRE(unloader.ins.size() == 1);  // 0 cargo + 1 fuel inlet
+    REQUIRE(unloader.outs.size() == 1);
+    REQUIRE(unloader.mode == VehicleStationNode::Mode::Unload);
+    REQUIRE(unloader.plug->direction == ax::NodeEditor::PinKind::Input);
+}
+
 /// @test GroupPoolByItem produces one independent group per item in a
 ///       multi-item pool.
 /// @covers VehicleRoute::GroupPoolByItem multi-item grouping.

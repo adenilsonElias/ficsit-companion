@@ -213,8 +213,145 @@ function followBeltChain(startCompPath, context) {
     return null;
 }
 
+function stripClassWrap(cls) {
+    const dotIdx = cls.lastIndexOf(".");
+    let s = dotIdx >= 0 ? cls.substring(dotIdx + 1) : cls;
+    if (s.endsWith("_C")) s = s.substring(0, s.length - 2);
+    return s;
+}
+
+function classifyGeneratorClass(buildingClass) {
+    const s = stripClassWrap(buildingClass);
+    // Geothermal generators burn no item fuel, so there is no Power (...) recipe
+    // to import them as. Treat them as unhandled rather than as a generator
+    // whose fuel "fails" to resolve (which would drop them with a misleading
+    // warning and is indistinguishable from a real resolution failure).
+    if (/GeoThermal/i.test(s)) return "";
+    if (s.startsWith("Build_Generator") ||
+        s.startsWith("Build_BiomassGenerator")) {
+        return "generator";
+    }
+    return "";
+}
+
+const GENERATOR_RECIPE_BY_FUEL = new Map([
+    ["Coal", "Power (Coal)"],
+    ["Compacted Coal", "Power (Compacted Coal)"],
+    ["Petroleum Coke", "Power (Petroleum Coke)"],
+    ["Fuel", "Power (Fuel)"],
+    ["Turbofuel", "Power (Turbofuel)"],
+    ["Liquid Biofuel", "Power (Liquid Biofuel)"],
+    ["Rocket Fuel", "Power (Rocket Fuel)"],
+    ["Ionized Fuel", "Power (Ionized Fuel)"],
+    ["Leaves", "Power (Leaves)"],
+    ["Wood", "Power (Wood)"],
+    ["Mycelia", "Power (Mycelia)"],
+    ["Biomass", "Power (Biomass)"],
+    ["Solid Biofuel", "Power (Solid Biofuel)"],
+    ["Packaged Liquid Biofuel", "Power (Packaged Liquid Biofuel)"],
+    ["Uranium Fuel Rod", "Power (Uranium Fuel Rod)"],
+    ["Plutonium Fuel Rod", "Power (Plutonium Fuel Rod)"],
+    ["Ficsonium Fuel Rod", "Power (Ficsonium Fuel Rod)"],
+    // Descriptor-derived aliases: some generator fuel descriptors strip/split
+    // into names that differ from the recipe item name (e.g. Desc_Biofuel ->
+    // "Biofuel" rather than "Solid Biofuel"). Map those raw forms too so fuel
+    // resolved straight from the descriptor still finds its Power recipe.
+    ["Biofuel", "Power (Solid Biofuel)"],
+    ["Liquid Fuel", "Power (Fuel)"],
+    ["Liquid Turbo Fuel", "Power (Turbofuel)"],
+    ["Packaged Biofuel", "Power (Packaged Liquid Biofuel)"],
+    ["Nuclear Fuel Rod", "Power (Uranium Fuel Rod)"],
+]);
+
+function generatorRecipeForFuel(fuelItemName) {
+    return GENERATOR_RECIPE_BY_FUEL.get(fuelItemName || "") || "";
+}
+
+function readStringValue(value) {
+    if (typeof value === "string") return value;
+    if (value && typeof value === "object") {
+        if (value.value && typeof value.value === "object") {
+            if (typeof value.value.pathName === "string") return value.value.pathName;
+            if (typeof value.value.PathName === "string") return value.value.PathName;
+            if (typeof value.value.objectPath === "string") return value.value.objectPath;
+            if (typeof value.value.ObjectPath === "string") return value.value.ObjectPath;
+        }
+        if (value.Value && typeof value.Value === "object") {
+            if (typeof value.Value.pathName === "string") return value.Value.pathName;
+            if (typeof value.Value.PathName === "string") return value.Value.PathName;
+            if (typeof value.Value.objectPath === "string") return value.Value.objectPath;
+            if (typeof value.Value.ObjectPath === "string") return value.Value.ObjectPath;
+        }
+        if (typeof value.pathName === "string") return value.pathName;
+        if (typeof value.PathName === "string") return value.PathName;
+        if (typeof value.objectPath === "string") return value.objectPath;
+        if (typeof value.ObjectPath === "string") return value.ObjectPath;
+        if (typeof value.value === "string") return value.value;
+        if (typeof value.Value === "string") return value.Value;
+    }
+    return "";
+}
+
+function firstInventoryItem(entity, componentSuffix, objectsByPath, itemDisplayName) {
+    const comps = entity.components || entity.Components || [];
+    for (const ref of comps) {
+        const cp = objectRefPath(ref);
+        if (!cp || cp.split(".").pop() !== componentSuffix) continue;
+        const c = findObjectByRefPaths(objectsByPath, [cp]);
+        const props = c && (c.properties || c.Properties);
+        const stacks = findProp(props, "mInventoryStacks");
+        const vals = stacks && (stacks.values || stacks.value || stacks.Value);
+        // Skip to the next matching component rather than abandoning the search:
+        // a later component with the same suffix may still hold the fuel stack.
+        if (!Array.isArray(vals)) continue;
+        for (const stack of vals) {
+            const stackProps = stack && (stack.properties || stack.Properties);
+            const item = findProp(stackProps, "Item");
+            const itemValue = item && (item.value !== undefined ? item.value : item.Value);
+            const ir = itemValue && (itemValue.itemReference || itemValue.ItemReference);
+            const path = readStringValue(ir);
+            const name = itemDisplayName(path || "");
+            if (name) return name;
+        }
+    }
+    return "";
+}
+
+function resolveGeneratorFuelItem(entity, objectsByPath, itemDisplayName) {
+    const props = entity.properties || entity.Properties;
+    const descriptorProps = [
+        "mFuelClass",
+        "mCurrentFuelClass",
+        "mCurrentFuel",
+        "mFuelType",
+        "mFuelTypeDescriptor",
+    ];
+    // A descriptor that resolves to a name backed by a real Power (...) recipe
+    // wins immediately. A non-empty-but-unmapped descriptor name is NOT trusted
+    // outright: fall through to the fuel inventory first (which often holds a
+    // mappable fuel), and only use the unmapped descriptor name as a last resort
+    // so genuinely unresolvable generators still surface a warning.
+    let unmappedDescriptor = "";
+    for (const propName of descriptorProps) {
+        const name = itemDisplayName(readStringValue(findPropDeep(props, propName)));
+        if (!name) continue;
+        if (generatorRecipeForFuel(name)) return name;
+        if (!unmappedDescriptor) unmappedDescriptor = name;
+    }
+    const fromInventory =
+        firstInventoryItem(entity, "FuelInventory", objectsByPath, itemDisplayName)
+        || firstInventoryItem(entity, "fuelInventory", objectsByPath, itemDisplayName)
+        || firstInventoryItem(entity, "inventory", objectsByPath, itemDisplayName);
+    return fromInventory || unmappedDescriptor;
+}
+
 module.exports = {
     buildFloorHolePeerMap,
     followBeltChain,
     getComponentPort,
+    stripClassWrap,
+    firstInventoryItem,
+    classifyGeneratorClass,
+    generatorRecipeForFuel,
+    resolveGeneratorFuelItem,
 };

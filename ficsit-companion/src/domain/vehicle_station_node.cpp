@@ -27,6 +27,16 @@ VehicleStationNode::VehicleStationNode(const ax::NodeEditor::NodeId id, Logistic
     plug = std::make_unique<Pin>(id_generator(), PlugDirectionFor(mode), this, nullptr);
 }
 
+VehicleStationNode::VehicleStationNode(const ax::NodeEditor::NodeId id, LogisticsNode::Kind logistics_kind,
+    Mode mode, size_t cargo_in, size_t cargo_out,
+    const std::function<unsigned long long int()>& id_generator)
+    // cargo_in cargo inputs + 1 fuel inlet (last input), cargo_out cargo outputs.
+    : LogisticsNode(id, logistics_kind, cargo_in + 1, cargo_out, id_generator),
+      mode(mode)
+{
+    plug = std::make_unique<Pin>(id_generator(), PlugDirectionFor(mode), this, nullptr);
+}
+
 VehicleStationNode::VehicleStationNode(const ax::NodeEditor::NodeId id, const std::function<unsigned long long int()>& id_generator,
     const Json::Value& serialized, const INodeDataResolver& resolver)
     : LogisticsNode(id, id_generator, serialized, resolver)

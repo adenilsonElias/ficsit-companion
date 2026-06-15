@@ -238,6 +238,13 @@ struct VehicleStationNode : public LogisticsNode
 
     VehicleStationNode(const ax::NodeEditor::NodeId id, LogisticsNode::Kind logistics_kind,
         const std::function<unsigned long long int()>& id_generator);
+    /// @brief Build with an explicit mode and cargo pin counts (used by the
+    /// .sav importer, which derives counts from observed belt ports). Allocates
+    /// `cargo_in` cargo inputs + 1 fuel inlet (last input) + `cargo_out` cargo
+    /// outputs, and a plug whose direction matches `mode`.
+    VehicleStationNode(const ax::NodeEditor::NodeId id, LogisticsNode::Kind logistics_kind,
+        Mode mode, size_t cargo_in, size_t cargo_out,
+        const std::function<unsigned long long int()>& id_generator);
     VehicleStationNode(const ax::NodeEditor::NodeId id, const std::function<unsigned long long int()>& id_generator,
         const Json::Value& serialized, const INodeDataResolver& resolver);
     virtual ~VehicleStationNode();

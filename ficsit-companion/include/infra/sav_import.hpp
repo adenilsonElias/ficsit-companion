@@ -137,9 +137,10 @@ namespace SavImport
     {
         LayoutMode layout_mode = LayoutMode::Compact;
         float world_spacing_scale = kPositionScale;
-        /// @brief If true, wire vehicle routes from the logistics block as
-        /// station→station Links (loader output → unloader input), inferring
-        /// load/unload direction from each station's connected cargo belts.
+        /// @brief If true, wire each vehicle route as plug↔plug route links
+        /// between stations (Load plug → Unload plug), recorded in each
+        /// station's route_links. Load/unload direction comes from the
+        /// station's mode (set on import from is_unloader), not belt inference.
         bool connect_vehicle_routes = false;
     };
 

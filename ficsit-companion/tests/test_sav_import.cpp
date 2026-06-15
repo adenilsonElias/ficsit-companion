@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <imgui_node_editor.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <string>
@@ -130,6 +132,15 @@ namespace
         belt.dst_port = dst_port;
         belt.dst_dir = "in";
         return belt;
+    }
+
+    SavImport::Building Sink(const std::string& id, const float x)
+    {
+        SavImport::Building b;
+        b.id = id;
+        b.kind = SavImport::BuildingKind::Sink;
+        b.x = x;
+        return b;
     }
 
     bool HasWarningContaining(
@@ -479,4 +490,229 @@ TEST_CASE("BuildGraph routes an unloader's input belt to fuel even when fuel equ
     {
         REQUIRE(station->ins[i]->link == nullptr);
     }
+}
+
+/// @test   With connect_vehicle_routes, a route of one loader + one unloader is
+///         wired by a plug<->plug route link recorded on both stations'
+///         route_links, with no cargo-pin route Link created.
+/// @covers SavImport::BuildGraph plug-based vehicle route wiring.
+TEST_CASE("BuildGraph wires vehicle routes as plug route links", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    parsed.buildings.push_back(Miner("iron_miner", "Iron Ore", -100.0f));
+    parsed.buildings.push_back(TruckStation("loader", 0.0f, "Coal", "Iron Ore", false));
+    parsed.buildings.push_back(TruckStation("unloader", 100.0f, "Coal", "Iron Ore", true));
+    // Factory belt feeds the loader's cargo input so it has a cargo pin + rate.
+    parsed.belts.push_back(Belt("iron_to_loader", "iron_miner", 0, "loader", 0));
+    parsed.logistics_stations.push_back(SavImport::LogisticsStation{ "loader", "guid-loader" });
+    parsed.logistics_stations.push_back(SavImport::LogisticsStation{ "unloader", "guid-unloader" });
+    parsed.vehicle_routes.push_back(std::vector<std::string>{ "loader", "unloader" });
+
+    SavImport::BuildOptions opts;
+    opts.connect_vehicle_routes = true;
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err, opts));
+
+    auto* loader = dynamic_cast<VehicleStationNode*>(out.nodes[1].get());
+    auto* unloader = dynamic_cast<VehicleStationNode*>(out.nodes[2].get());
+    REQUIRE(loader != nullptr);
+    REQUIRE(unloader != nullptr);
+    // One route link, indexed on both stations, connecting the two plugs.
+    REQUIRE(loader->route_links.size() == 1);
+    REQUIRE(unloader->route_links.size() == 1);
+    Link* rl = loader->route_links.front();
+    REQUIRE(rl == unloader->route_links.front());
+    REQUIRE(rl->start == loader->plug.get());
+    REQUIRE(rl->end == unloader->plug.get());
+    // Plugs carry no Pin::link (route links live in route_links only).
+    REQUIRE(loader->plug->link == nullptr);
+    REQUIRE(unloader->plug->link == nullptr);
+}
+
+/// @test   A (loader, unloader) pair shared by two vehicle routes is wired by a
+///         single route link, not one per route (dedup spans all routes).
+/// @covers SavImport::BuildGraph vehicle route link dedup across routes.
+TEST_CASE("BuildGraph dedups a shared station pair across routes", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    parsed.buildings.push_back(TruckStation("loader", 0.0f, "Coal", "Iron Ore", false));
+    parsed.buildings.push_back(TruckStation("unloader", 100.0f, "Coal", "Iron Ore", true));
+    parsed.logistics_stations.push_back(SavImport::LogisticsStation{ "loader", "guid-loader" });
+    parsed.logistics_stations.push_back(SavImport::LogisticsStation{ "unloader", "guid-unloader" });
+    parsed.vehicle_routes.push_back(std::vector<std::string>{ "loader", "unloader" });
+    parsed.vehicle_routes.push_back(std::vector<std::string>{ "loader", "unloader" });
+
+    SavImport::BuildOptions opts;
+    opts.connect_vehicle_routes = true;
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err, opts));
+
+    auto* loader = dynamic_cast<VehicleStationNode*>(out.nodes[0].get());
+    auto* unloader = dynamic_cast<VehicleStationNode*>(out.nodes[1].get());
+    REQUIRE(loader != nullptr);
+    REQUIRE(unloader != nullptr);
+    REQUIRE(loader->route_links.size() == 1);
+    REQUIRE(unloader->route_links.size() == 1);
+}
+
+/// @test   A route containing only loaders (no unloader) creates no route links.
+/// @covers SavImport::BuildGraph vehicle route wiring with no matching pair.
+TEST_CASE("BuildGraph creates no route link for a loader-only route", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    parsed.buildings.push_back(TruckStation("loader_a", 0.0f, "Coal", "Iron Ore", false));
+    parsed.buildings.push_back(TruckStation("loader_b", 100.0f, "Coal", "Iron Ore", false));
+    parsed.logistics_stations.push_back(SavImport::LogisticsStation{ "loader_a", "guid-a" });
+    parsed.logistics_stations.push_back(SavImport::LogisticsStation{ "loader_b", "guid-b" });
+    parsed.vehicle_routes.push_back(std::vector<std::string>{ "loader_a", "loader_b" });
+
+    SavImport::BuildOptions opts;
+    opts.connect_vehicle_routes = true;
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err, opts));
+
+    auto* a = dynamic_cast<VehicleStationNode*>(out.nodes[0].get());
+    auto* b = dynamic_cast<VehicleStationNode*>(out.nodes[1].get());
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    REQUIRE(a->route_links.empty());
+    REQUIRE(b->route_links.empty());
+}
+
+/// @test   After wiring a plug route, the importer balances the pool so the
+///         loader's incoming cargo rate appears on the unloader's cargo output.
+/// @covers SavImport::BuildGraph route pool auto-balance on import.
+TEST_CASE("BuildGraph balances cargo rate across an imported route pool", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    parsed.buildings.push_back(Miner("iron_miner", "Iron Ore", -100.0f)); // Mk1 normal = 60/min
+    parsed.buildings.push_back(TruckStation("loader", 0.0f, "Coal", "Iron Ore", false));
+    parsed.buildings.push_back(TruckStation("unloader", 100.0f, "Coal", "Iron Ore", true));
+    parsed.buildings.push_back(Sink("sink", 200.0f));
+    parsed.belts.push_back(Belt("iron_to_loader", "iron_miner", 0, "loader", 0));
+    parsed.belts.push_back(Belt("unloader_to_sink", "unloader", 0, "sink", 0));
+    parsed.logistics_stations.push_back(SavImport::LogisticsStation{ "loader", "guid-loader" });
+    parsed.logistics_stations.push_back(SavImport::LogisticsStation{ "unloader", "guid-unloader" });
+    parsed.vehicle_routes.push_back(std::vector<std::string>{ "loader", "unloader" });
+
+    SavImport::BuildOptions opts;
+    opts.connect_vehicle_routes = true;
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err, opts));
+
+    // nodes follow parsed.buildings insertion order: [0]=miner, [1]=loader, [2]=unloader, [3]=sink
+    auto* loader = dynamic_cast<VehicleStationNode*>(out.nodes[1].get());
+    auto* unloader = dynamic_cast<VehicleStationNode*>(out.nodes[2].get());
+    REQUIRE(loader != nullptr);
+    REQUIRE(unloader != nullptr);
+
+    REQUIRE(!loader->ins.empty());
+    const Pin* loader_in = loader->ins.front().get();
+    REQUIRE(loader_in->item != nullptr);
+    REQUIRE(loader_in->current_rate.GetNumerator() != 0);
+
+    bool balanced = false;
+    for (const auto& p : unloader->outs)
+    {
+        if (p->link != nullptr && p->item != nullptr
+            && p->current_rate == loader_in->current_rate)
+        {
+            balanced = true;
+        }
+    }
+    REQUIRE(balanced);
+}
+
+/// @test   Truck/train stations import as VehicleStationNode, with mode derived
+///       from is_unloader and a vehicle plug whose direction matches the mode.
+/// @covers SavImport::BuildGraph station node type + mode.
+TEST_CASE("BuildGraph imports stations as VehicleStationNode with mode", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    parsed.buildings.push_back(TruckStation("loader", 0.0f, "Coal", "Iron Ore", false));
+    parsed.buildings.push_back(TruckStation("unloader", 100.0f, "Coal", "Iron Ore", true));
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err));
+
+    REQUIRE(out.nodes.size() == 2);
+    auto* loader = dynamic_cast<VehicleStationNode*>(out.nodes[0].get());
+    auto* unloader = dynamic_cast<VehicleStationNode*>(out.nodes[1].get());
+    REQUIRE(loader != nullptr);
+    REQUIRE(unloader != nullptr);
+    REQUIRE(loader->mode == VehicleStationNode::Mode::Load);
+    REQUIRE(unloader->mode == VehicleStationNode::Mode::Unload);
+    REQUIRE(loader->plug->direction == ax::NodeEditor::PinKind::Output);
+    REQUIRE(unloader->plug->direction == ax::NodeEditor::PinKind::Input);
+    REQUIRE(loader->ins.size() == 3);    // 2 cargo inputs + 1 fuel input
+    REQUIRE(loader->outs.size() == 2);   // 2 cargo outputs
+    REQUIRE(unloader->ins.size() == 3);  // 2 cargo inputs + 1 fuel input
+    REQUIRE(unloader->outs.size() == 2); // 2 cargo outputs
+}
+
+/// @test   A generator emitted by the JS wrapper as a normal manufacturer with
+///         a Power (...) recipe imports as an ordinary CraftNode. This locks the
+///         chosen design: no GeneratorNode or BuildingKind::Generator is needed
+///         for this phase.
+/// @covers SavImport::BuildGraph generator-as-manufacturer import.
+TEST_CASE("BuildGraph imports a resolved generator recipe as a craft node", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    parsed.buildings.push_back(Manufacturer("coal_generator", "Power (Coal)", 0.0f));
+    parsed.buildings.back().clock = 0.5;
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err));
+
+    REQUIRE(out.nodes.size() == 1);
+    REQUIRE(out.nodes[0]->IsCraft());
+
+    const auto* generator = static_cast<const CraftNode*>(out.nodes[0].get());
+    REQUIRE(generator->recipe != nullptr);
+    REQUIRE(generator->recipe->name == "Power (Coal)");
+    REQUIRE(generator->current_rate == FractionalNumber(1, 2));
+
+    auto coal_pin = std::find_if(generator->ins.begin(), generator->ins.end(), [](const std::unique_ptr<Pin>& pin) {
+        return pin->item != nullptr && pin->item->name == "Coal";
+    });
+    auto water_pin = std::find_if(generator->ins.begin(), generator->ins.end(), [](const std::unique_ptr<Pin>& pin) {
+        return pin->item != nullptr && pin->item->name == "Water";
+    });
+    REQUIRE(coal_pin != generator->ins.end());
+    REQUIRE(water_pin != generator->ins.end());
+    REQUIRE(generator->outs.empty());
 }
