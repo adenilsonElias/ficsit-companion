@@ -212,6 +212,9 @@ struct LogisticsNode : public Node
         TrainStation = 3,
         // ALWAYS ADD NEW TYPES HERE (appending preserves saved kind indices)
         DimensionalDepot = 4,
+        PipeJunction = 5,
+        FluidBuffer = 6,
+        IndustrialFluidBuffer = 7,
     };
 
     LogisticsNode(const ax::NodeEditor::NodeId id, LogisticsNode::Kind logistics_kind,

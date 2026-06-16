@@ -25,6 +25,8 @@ namespace SavImport
         TruckStation,
         TrainStation,
         DimensionalDepot,
+        FluidBuffer,
+        IndustrialFluidBuffer,
     };
 
     /// @brief One Satisfactory placed building, parsed from wrapper JSON.
@@ -98,6 +100,24 @@ namespace SavImport
         std::string guid; ///< route GUID identifying it in vehicle routes
     };
 
+    /// @brief One machine pipe connector on a network. `dir` is the wrapper's
+    /// name-based hint ("in"/"out"/"any"); the importer prefers matching the
+    /// network fluid against the node's recipe pins and uses `dir` as fallback.
+    struct PipeEndpoint
+    {
+        std::string building;
+        std::string dir;
+    };
+
+    /// @brief A fluid network: its carried fluid (display name, empty if
+    /// unresolved) and the machine endpoints attached to it.
+    struct PipeNetwork
+    {
+        int id = -1;
+        std::string fluid;
+        std::vector<PipeEndpoint> endpoints;
+    };
+
     struct ParseResult
     {
         std::vector<Building> buildings;
@@ -108,6 +128,10 @@ namespace SavImport
         /// @brief Each entry is one vehicle's route, resolved to an ordered list
         /// of station ids (GUIDs already mapped to Building ids).
         std::vector<std::vector<std::string>> vehicle_routes;
+        /// @brief Fluid networks extracted from the pipe graph: each carries a
+        /// fluid name and the machine endpoints connected to it. A network with
+        /// no endpoints is a no-op for the graph builder.
+        std::vector<PipeNetwork> pipe_networks;
         std::string error;
         bool ok = false;
     };

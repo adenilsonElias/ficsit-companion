@@ -301,6 +301,21 @@ input, it has no matching `Output2`. The importer uses exactly this
 (`stationFuelConnectorSuffix` in `wrapper.js`), because the name alone doesn't
 say "fuel". Connector numbering here is **0‑based**.
 
+## 10b. Pipe (fluid) topology
+
+Pipes are reconstructed by **network id**, not chain-walking. Every pipe
+connector (`FGPipeConnectionFactory` on machines, `FGPipeConnectionComponent` on
+plumbing) carries `mPipeNetworkID`. `FGPipeNetwork` actors map that id to the
+fluid (`mFluidDescriptor`) and list the network's members. Pumps
+(`Build_PipelinePump`), junctions (`Build_PipelineJunction_*`) and segments
+(`Build_Pipeline`) all share one network id and are **not** emitted as nodes:
+grouping machine ports by network id absorbs them. The importer classifies each
+machine port as producer/consumer by matching the network fluid against the
+machine's recipe pins, then wires either a direct producer-to-consumer link
+(1:1) or one synthetic `PipeJunction` manifold node (N:M).
+`Build_PipeStorageTank` / `Build_IndustrialTank` become `FluidBuffer` /
+`IndustrialFluidBuffer` logistics nodes. No pressure/head is modeled.
+
 ---
 
 ## 11. Special properties

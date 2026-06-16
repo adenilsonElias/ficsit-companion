@@ -345,6 +345,49 @@ function resolveGeneratorFuelItem(entity, objectsByPath, itemDisplayName) {
     return fromInventory || unmappedDescriptor;
 }
 
+function readIntPropValue(props, name) {
+    const raw = findProp(props, name);
+    if (typeof raw === "number") return raw;
+    if (raw && typeof raw === "object" && typeof raw.value === "number") return raw.value;
+    return null;
+}
+
+// A pipe connector on a machine (FGPipeConnectionFactory) or on plumbing
+// (FGPipeConnectionComponent). Connected pipe connectors carry mPipeNetworkID;
+// belt connectors and unconnected pipe ports do not, so those return null.
+// Direction is inferred from the component name suffix; ambiguous ports
+// (ConnectionAny*, bare FGPipeConnectionFactory) return "any" and are resolved
+// C++-side against the machine's recipe fluid pins.
+function pipeConnectorInfo(comp) {
+    if (!comp) return null;
+    const props = comp.properties || comp.Properties;
+    const networkId = readIntPropValue(props, "mPipeNetworkID");
+    if (networkId === null) return null;
+    const name = comp.instanceName || comp.InstanceName || "";
+    const dot = name.lastIndexOf(".");
+    const suffix = dot >= 0 ? name.substring(dot + 1) : name;
+    let dir = "any";
+    if (/PipeInput/i.test(suffix)) dir = "in";
+    else if (/PipeOutput/i.test(suffix)) dir = "out";
+    return { networkId, dir };
+}
+
+// An FGPipeNetwork actor: { id, fluidClass } or null. fluidClass is the raw
+// Desc_* path; the caller maps it to a display name via itemDisplayName.
+function readPipeNetwork(actor) {
+    const props = actor && (actor.properties || actor.Properties);
+    const id = readIntPropValue(props, "mPipeNetworkID");
+    if (id === null) return null;
+    let fluidClass = "";
+    const rawFd = findProp(props, "mFluidDescriptor");
+    const fd = (rawFd && typeof rawFd === "object" && rawFd.value !== undefined)
+        ? rawFd.value : rawFd;
+    if (fd && typeof fd === "object") {
+        fluidClass = normalizeObjectPath(fd.pathName || fd.PathName || "");
+    }
+    return { id, fluidClass };
+}
+
 module.exports = {
     buildFloorHolePeerMap,
     followBeltChain,
@@ -354,4 +397,6 @@ module.exports = {
     classifyGeneratorClass,
     generatorRecipeForFuel,
     resolveGeneratorFuelItem,
+    pipeConnectorInfo,
+    readPipeNetwork,
 };

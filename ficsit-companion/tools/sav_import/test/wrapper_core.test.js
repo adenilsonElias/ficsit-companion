@@ -330,6 +330,85 @@ test("generator active fuel resolves from uppercase parser fuel inventory shapes
     assert.equal(resolveGeneratorFuelItem(entity, objectsByPath, itemDisplayName), "Solid Biofuel");
 });
 
+const {
+    pipeConnectorInfo,
+    readPipeNetwork,
+} = require("../wrapper_core");
+
+test("pipeConnectorInfo reads network id and infers direction from the name", () => {
+    const inPort = {
+        instanceName: "Refinery.PipeInputFactory",
+        properties: { mPipeNetworkID: { value: 15 } },
+    };
+    const outPort = {
+        instanceName: "Refinery.PipeOutputFactory",
+        properties: { mPipeNetworkID: { value: 7 } },
+    };
+    const anyPort = {
+        instanceName: "Tank.ConnectionAny0",
+        properties: { mPipeNetworkID: { value: 13 } },
+    };
+    const bare = {
+        instanceName: "WaterPump.FGPipeConnectionFactory",
+        properties: { mPipeNetworkID: { value: 2 } },
+    };
+    assert.deepEqual(pipeConnectorInfo(inPort), { networkId: 15, dir: "in" });
+    assert.deepEqual(pipeConnectorInfo(outPort), { networkId: 7, dir: "out" });
+    assert.deepEqual(pipeConnectorInfo(anyPort), { networkId: 13, dir: "any" });
+    assert.deepEqual(pipeConnectorInfo(bare), { networkId: 2, dir: "any" });
+});
+
+test("pipeConnectorInfo returns null without a network id (belt port / unconnected)", () => {
+    const beltPort = { instanceName: "Refinery.Output1", properties: {} };
+    assert.equal(pipeConnectorInfo(beltPort), null);
+    assert.equal(pipeConnectorInfo(null), null);
+});
+
+test("readPipeNetwork extracts id and raw fluid class", () => {
+    const net = {
+        instanceName: "FGPipeNetwork_1",
+        properties: {
+            mPipeNetworkID: { value: 7 },
+            mFluidDescriptor: {
+                value: { pathName: "/Game/.../Desc_HeavyOilResidue.Desc_HeavyOilResidue_C" },
+            },
+        },
+    };
+    assert.deepEqual(readPipeNetwork(net), {
+        id: 7,
+        fluidClass: "/Game/.../Desc_HeavyOilResidue.Desc_HeavyOilResidue_C",
+    });
+});
+
+test("readPipeNetwork returns null when id is missing", () => {
+    assert.equal(readPipeNetwork({ properties: {} }), null);
+});
+
+test("pipeConnectorInfo and readPipeNetwork handle array-style property bags", () => {
+    const port = {
+        instanceName: "Refinery.PipeOutputFactory",
+        properties: [{ name: "mPipeNetworkID", value: 7 }],
+    };
+    assert.deepEqual(pipeConnectorInfo(port), { networkId: 7, dir: "out" });
+
+    const net = {
+        instanceName: "FGPipeNetwork_2",
+        properties: [
+            { name: "mPipeNetworkID", value: 2 },
+            { name: "mFluidDescriptor", value: { pathName: "/Game/.../Desc_Water.Desc_Water_C" } },
+        ],
+    };
+    assert.deepEqual(readPipeNetwork(net), {
+        id: 2,
+        fluidClass: "/Game/.../Desc_Water.Desc_Water_C",
+    });
+});
+
+test("readPipeNetwork returns empty fluidClass when descriptor is absent", () => {
+    const net = { instanceName: "FGPipeNetwork_3", properties: { mPipeNetworkID: { value: 9 } } };
+    assert.deepEqual(readPipeNetwork(net), { id: 9, fluidClass: "" });
+});
+
 test("normal lift traversal does not bounce back after crossing a floor hole", () => {
     const objectsByPath = new Map();
     const beltPaths = new Set(["LiftA", "LiftB"]);

@@ -140,6 +140,8 @@ namespace SavImport
             if (s == "truck_station")  return BuildingKind::TruckStation;
             if (s == "train_station")  return BuildingKind::TrainStation;
             if (s == "dimensional_depot") return BuildingKind::DimensionalDepot;
+            if (s == "fluid_buffer")      return BuildingKind::FluidBuffer;
+            if (s == "industrial_fluid_buffer") return BuildingKind::IndustrialFluidBuffer;
             return BuildingKind::Unknown;
         }
 
@@ -385,6 +387,22 @@ namespace SavImport
                 }
             }
         }
+
+        // First output (is_output=true) / input pin carrying `item` that has no
+        // link yet, or nullptr. Used to attach a pipe edge to the correct fluid
+        // pin of a multi-port machine without colliding with an existing link.
+        Pin* FreeFluidPin(Node* node, const Item* item, bool is_output)
+        {
+            auto& pins = is_output ? node->outs : node->ins;
+            for (auto& p : pins)
+            {
+                if (p->item == item && p->link == nullptr)
+                {
+                    return p.get();
+                }
+            }
+            return nullptr;
+        }
     }
 
     ParseResult ParseWrapperJson(const std::string& json)
@@ -573,6 +591,27 @@ namespace SavImport
                     }
                     if (route.size() >= 2) result.vehicle_routes.push_back(std::move(route));
                 }
+            }
+        }
+
+        if (root.contains("pipe_networks") && root["pipe_networks"].is_array())
+        {
+            for (const auto& n : root["pipe_networks"].get_array())
+            {
+                PipeNetwork net;
+                if (n.contains("id") && n["id"].is_number()) net.id = n["id"].get<int>();
+                if (n.contains("fluid") && n["fluid"].is_string()) net.fluid = n["fluid"].get_string();
+                if (n.contains("endpoints") && n["endpoints"].is_array())
+                {
+                    for (const auto& e : n["endpoints"].get_array())
+                    {
+                        PipeEndpoint ep;
+                        if (e.contains("building") && e["building"].is_string()) ep.building = e["building"].get_string();
+                        if (e.contains("dir") && e["dir"].is_string()) ep.dir = e["dir"].get_string();
+                        if (!ep.building.empty()) net.endpoints.push_back(std::move(ep));
+                    }
+                }
+                result.pipe_networks.push_back(std::move(net));
             }
         }
 
@@ -957,6 +996,18 @@ namespace SavImport
                     node = std::make_unique<LogisticsNode>(id_generator(), kind,
                         total_in, resolved_cargo_out, id_generator);
                 }
+                break;
+            }
+            case BuildingKind::FluidBuffer:
+            {
+                node = std::make_unique<LogisticsNode>(id_generator(),
+                    LogisticsNode::Kind::FluidBuffer, 1, 1, id_generator);
+                break;
+            }
+            case BuildingKind::IndustrialFluidBuffer:
+            {
+                node = std::make_unique<LogisticsNode>(id_generator(),
+                    LogisticsNode::Kind::IndustrialFluidBuffer, 2, 2, id_generator);
                 break;
             }
             case BuildingKind::Unknown:
@@ -1419,6 +1470,164 @@ namespace SavImport
             }
         }
 
+        // ---- Step: pipe networks (fluid manifolds) ----
+        // Each network is a shared fluid bus. We classify endpoints into
+        // producers (a node output carrying the fluid) and consumers (a node
+        // input carrying the fluid), then either wire a 1:1 network directly
+        // or build one PipeJunction logistics node.
+        size_t pipe_direct_links = 0;
+        size_t pipe_manifolds = 0;
+        size_t pipe_nets_unresolved = 0;
+        size_t pipe_nets_no_flow = 0;
+        std::unordered_map<Node*, bool> buffer_consumed;
+        std::unordered_map<Node*, bool> buffer_produced;
+        auto make_pipe_link = [&](Pin* start, Pin* end) {
+            out.links.emplace_back(std::make_unique<Link>(id_generator(), start, end));
+            start->link = out.links.back().get();
+            end->link = out.links.back().get();
+        };
+
+        for (const PipeNetwork& net : parsed.pipe_networks)
+        {
+            const Item* fluid = LookupItem(net.fluid);
+            if (fluid == nullptr)
+            {
+                pipe_nets_unresolved += 1;
+                continue;
+            }
+
+            std::vector<Pin*> producers;
+            std::vector<Pin*> consumers;
+            std::vector<Node*> endpoint_nodes;
+            std::unordered_set<Node*> seen_in_net;
+            for (const PipeEndpoint& ep : net.endpoints)
+            {
+                auto idx = id_to_index.find(ep.building);
+                if (idx == id_to_index.end()) continue;
+                Node* node = out.nodes[idx->second].get();
+                if (!seen_in_net.insert(node).second) continue;
+                endpoint_nodes.push_back(node);
+
+                const bool is_fluid_buffer = node->IsLogistics()
+                    && (static_cast<LogisticsNode*>(node)->logistics_kind == LogisticsNode::Kind::FluidBuffer
+                        || static_cast<LogisticsNode*>(node)->logistics_kind == LogisticsNode::Kind::IndustrialFluidBuffer);
+
+                if (is_fluid_buffer)
+                {
+                    if (!buffer_consumed[node])
+                    {
+                        for (auto& p : node->ins)
+                        {
+                            if (p->link == nullptr)
+                            {
+                                p->item = fluid;
+                                consumers.push_back(p.get());
+                                break;
+                            }
+                        }
+                        buffer_consumed[node] = true;
+                    }
+                    else if (!buffer_produced[node])
+                    {
+                        for (auto& p : node->outs)
+                        {
+                            if (p->link == nullptr)
+                            {
+                                p->item = fluid;
+                                producers.push_back(p.get());
+                                break;
+                            }
+                        }
+                        buffer_produced[node] = true;
+                    }
+                    continue;
+                }
+
+                if (node->IsExtractor() && !node->outs.empty()
+                    && node->outs[0]->item == fluid && node->outs[0]->link == nullptr)
+                {
+                    producers.push_back(node->outs[0].get());
+                    continue;
+                }
+                if (Pin* op = FreeFluidPin(node, fluid, true))
+                {
+                    producers.push_back(op);
+                    continue;
+                }
+                if (Pin* ip = FreeFluidPin(node, fluid, false))
+                {
+                    consumers.push_back(ip);
+                    continue;
+                }
+                if (ep.dir == "out" && !node->outs.empty() && node->outs[0]->link == nullptr)
+                {
+                    producers.push_back(node->outs[0].get());
+                }
+                else if (ep.dir == "in" && !node->ins.empty() && node->ins[0]->link == nullptr)
+                {
+                    consumers.push_back(node->ins[0].get());
+                }
+            }
+
+            if (producers.empty() || consumers.empty())
+            {
+                pipe_nets_no_flow += 1;
+                continue;
+            }
+
+            if (producers.size() == 1 && consumers.size() == 1)
+            {
+                make_pipe_link(producers[0], consumers[0]);
+                pipe_direct_links += 1;
+                continue;
+            }
+
+            auto junction = std::make_unique<LogisticsNode>(id_generator(),
+                LogisticsNode::Kind::PipeJunction, producers.size(), consumers.size(), id_generator);
+            float cx = 0.0f;
+            float cy = 0.0f;
+            for (Node* n : endpoint_nodes)
+            {
+                cx += n->pos.x;
+                cy += n->pos.y;
+            }
+            if (!endpoint_nodes.empty())
+            {
+                cx /= static_cast<float>(endpoint_nodes.size());
+                cy /= static_cast<float>(endpoint_nodes.size());
+            }
+            junction->pos = ImVec2(cx, cy);
+            for (auto& p : junction->ins) p->item = fluid;
+            for (auto& p : junction->outs) p->item = fluid;
+            Node* jraw = junction.get();
+            out.nodes.push_back(std::move(junction));
+            for (size_t i = 0; i < producers.size(); ++i)
+            {
+                make_pipe_link(producers[i], jraw->ins[i].get());
+            }
+            for (size_t j = 0; j < consumers.size(); ++j)
+            {
+                make_pipe_link(jraw->outs[j].get(), consumers[j]);
+            }
+            pipe_manifolds += 1;
+        }
+
+        if (pipe_direct_links > 0 || pipe_manifolds > 0)
+        {
+            out.warnings.push_back("[pipes] " + std::to_string(pipe_direct_links)
+                + " direct link(s), " + std::to_string(pipe_manifolds) + " manifold(s)");
+        }
+        if (pipe_nets_unresolved > 0)
+        {
+            out.warnings.push_back("[pipes] " + std::to_string(pipe_nets_unresolved)
+                + " network(s) skipped: unresolved fluid");
+        }
+        if (pipe_nets_no_flow > 0)
+        {
+            out.warnings.push_back("[pipes] " + std::to_string(pipe_nets_no_flow)
+                + " network(s) skipped: no producer/consumer pair");
+        }
+
         // ---- Step: vehicle route links (opt-in) ----
         // Wire each recorded vehicle route as plug<->plug route links.
         // A Load station's plug is an Output; an Unload station's plug is an
@@ -1651,6 +1860,33 @@ namespace SavImport
                 }
                 else if (node->IsLogistics())
                 {
+                    const auto* logistics = static_cast<const LogisticsNode*>(node.get());
+                    if (logistics->logistics_kind == LogisticsNode::Kind::PipeJunction)
+                    {
+                        FractionalNumber total_supply(0, 1);
+                        for (const auto& p : node->ins)
+                        {
+                            if (p->link == nullptr || p->link->start == nullptr) continue;
+                            const FractionalNumber supply = p->link->start->current_rate;
+                            if (p->current_rate != supply) { p->current_rate = supply; changed = true; }
+                            total_supply = total_supply + supply;
+                        }
+                        size_t connected_outs = 0;
+                        for (const auto& p : node->outs)
+                        {
+                            if (p->link != nullptr) connected_outs += 1;
+                        }
+                        if (connected_outs == 0) continue;
+                        const FractionalNumber per_out = total_supply
+                            / FractionalNumber(static_cast<long long>(connected_outs));
+                        for (const auto& p : node->outs)
+                        {
+                            if (p->link == nullptr) continue;
+                            if (p->current_rate != per_out) { p->current_rate = per_out; changed = true; }
+                        }
+                        continue;
+                    }
+
                     FractionalNumber total(0, 1);
                     size_t connected_outs = 0;
                     for (const auto& p : node->outs)

@@ -125,6 +125,12 @@ const char* LogisticsNode::GetDisplayName() const
         return "Train Station";
     case LogisticsNode::Kind::DimensionalDepot:
         return "Dimensional Depot";
+    case LogisticsNode::Kind::PipeJunction:
+        return "Pipe Junction";
+    case LogisticsNode::Kind::FluidBuffer:
+        return "Fluid Buffer";
+    case LogisticsNode::Kind::IndustrialFluidBuffer:
+        return "Industrial Fluid Buffer";
     default:
         return "Logistics";
     }

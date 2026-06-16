@@ -5,7 +5,7 @@
  * Reads a Satisfactory 1.2 .sav file, parses it with
  * @etothepii/satisfactory-file-parser, classifies each placed building as
  * one of {manufacturer, miner, splitter, smart_splitter, prog_splitter,
- * merger, sink, storage, truck_station, train_station}. Generator actors are
+ * merger, sink, storage, truck_station, train_station, fluid_buffer, industrial_fluid_buffer}. Generator actors are
  * resolved to manufacturer entries with Power (...) recipes when their active
  * fuel is known. The adapter then collapses chained conveyor poles into single
  * belts and writes the result as JSON to stdout in the schema documented in
@@ -27,6 +27,8 @@ const {
     classifyGeneratorClass,
     generatorRecipeForFuel,
     resolveGeneratorFuelItem,
+    pipeConnectorInfo,
+    readPipeNetwork,
 } = BeltCore;
 
 function die(msg) {
@@ -280,7 +282,13 @@ function classifyBuilding(buildingClass) {
         || s.startsWith("Build_ConveyorPole")
         || s.startsWith("Build_ConveyorLift")
         || s.startsWith("Build_ConveyorCeiling")) return "belt_pole";
-    if (s.startsWith("Build_Pipeline")) return "pipe";
+    // Pipe plumbing carries no production node; networks are reconstructed from
+    // mPipeNetworkID instead (see pipe_networks below). Pumps/junctions/segments
+    // are absorbed by network-id grouping, so none of them are emitted.
+    if (s.startsWith("Build_Pipeline")
+        || s.startsWith("Build_FoundationPassthrough_Pipe")) return "pipe";
+    if (s.startsWith("Build_PipeStorageTank")) return "fluid_buffer";
+    if (s.startsWith("Build_IndustrialTank")) return "industrial_fluid_buffer";
     if (s.startsWith("Build_StorageContainerMk2")) return "industrial_storage";
     if (s.startsWith("Build_StorageContainer")) return "storage";
     // Dimensional Depot uploader (Satisfactory 1.0). The U6/1.0 class name is
@@ -299,7 +307,6 @@ function classifyBuilding(buildingClass) {
     if (s.startsWith("Build_ConveyorAttachmentSplitterProgrammable")) return "prog_splitter";
     if (s.startsWith("Build_ConveyorAttachmentSplitter")) return "splitter";
     if (s.startsWith("Build_ConveyorAttachmentMerger")) return "merger";
-    if (s.startsWith("Build_PipelineJunction")) return "merger";
     if (s.includes("ResourceSink")) return "sink";
     if (s.startsWith("Build_Miner")) return "miner";
     if (s.startsWith("Build_OilPump") || s.startsWith("Build_WaterPump") || s.startsWith("Build_FrackingExtractor")) return "miner";
@@ -960,6 +967,54 @@ if (belts.length > 0) {
 }
 
 // ---------------------------------------------------------------------------
+// Pipe networks.
+//
+// Unlike belts, pipes are not chain-walked: every pipe connector carries an
+// mPipeNetworkID and FGPipeNetwork actors map that id -> the fluid carried.
+// We group each emitted building's pipe connectors by network id; pumps,
+// junctions and segments are plumbing that shares the network id and are not
+// emitted. The C++ side resolves producer/consumer direction per endpoint and
+// wires a manifold. Topology documented in docs/save_game.md.
+// ---------------------------------------------------------------------------
+const pipe_networks = [];
+try {
+    const pipeFluidById = new Map(); // network id -> fluid display name
+    for (const a of actors) {
+        if (stripClassWrap(a.className || a.ClassName || a.typePath || "") !== "FGPipeNetwork") continue;
+        const net = readPipeNetwork(a);
+        if (!net) continue;
+        pipeFluidById.set(net.id, itemDisplayName(net.fluidClass));
+    }
+
+    const pipeEndpointsByNet = new Map(); // network id -> [{ building, dir }]
+    for (const b of buildings) {
+        const entity = findObjectByRefPaths(objectsByPath, [b.id]);
+        if (!entity) continue;
+        const compRefs = entity.components || entity.Components || [];
+        for (const ref of compRefs) {
+            const compPath = objectRefPath(ref);
+            if (!compPath) continue;
+            const comp = findObjectByRefPaths(objectsByPath, [compPath]);
+            const info = pipeConnectorInfo(comp);
+            if (!info) continue;
+            if (!pipeEndpointsByNet.has(info.networkId)) pipeEndpointsByNet.set(info.networkId, []);
+            pipeEndpointsByNet.get(info.networkId).push({ building: b.id, dir: info.dir });
+        }
+    }
+
+    for (const [id, endpoints] of pipeEndpointsByNet) {
+        pipe_networks.push({
+            id,
+            fluid: pipeFluidById.get(id) || "",
+            endpoints,
+        });
+    }
+} catch (e) {
+    warnings.push("[pipes] extraction failed: " + (e && e.message ? e.message : String(e)));
+}
+warnings.push("[pipes] " + pipe_networks.length + " network(s) with machine endpoints");
+
+// ---------------------------------------------------------------------------
 // Logistics extraction (Vehicle Map tool).
 //
 // Additive, single-pass over the already-built `actors` / `objectsByPath`.
@@ -1214,6 +1269,7 @@ const out = {
     belts,
     warnings,
     logistics,
+    pipe_networks,
 };
 
 process.stdout.write(JSON.stringify(out));

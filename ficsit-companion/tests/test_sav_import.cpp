@@ -99,6 +99,18 @@ namespace
         return b;
     }
 
+    SavImport::Building WaterExtractor(const std::string& id, const float x)
+    {
+        SavImport::Building b;
+        b.id = id;
+        b.kind = SavImport::BuildingKind::Miner;
+        b.item_name = "Water";
+        b.extractor_kind = 4;
+        b.clock = 1.0;
+        b.x = x;
+        return b;
+    }
+
     SavImport::Building TruckStation(
         const std::string& id,
         const float x,
@@ -139,6 +151,15 @@ namespace
         SavImport::Building b;
         b.id = id;
         b.kind = SavImport::BuildingKind::Sink;
+        b.x = x;
+        return b;
+    }
+
+    SavImport::Building FluidBuffer(const std::string& id, const float x)
+    {
+        SavImport::Building b;
+        b.id = id;
+        b.kind = SavImport::BuildingKind::FluidBuffer;
         b.x = x;
         return b;
     }
@@ -715,4 +736,205 @@ TEST_CASE("BuildGraph imports a resolved generator recipe as a craft node", "[sa
     REQUIRE(coal_pin != generator->ins.end());
     REQUIRE(water_pin != generator->ins.end());
     REQUIRE(generator->outs.empty());
+}
+
+/// @covers SavImport::ParseWrapperJson pipe_networks parsing.
+TEST_CASE("ParseWrapperJson reads pipe_networks endpoints and fluid", "[sav_import]")
+{
+    const std::string json = R"({
+        "buildings": [],
+        "belts": [],
+        "pipe_networks": [
+            { "id": 7, "fluid": "Heavy Oil Residue",
+              "endpoints": [
+                { "building": "ref_a", "dir": "out" },
+                { "building": "ref_b", "dir": "in" },
+                { "building": "", "dir": "in" }
+              ] }
+        ]
+    })";
+
+    SavImport::ParseResult parsed = SavImport::ParseWrapperJson(json);
+    REQUIRE(parsed.ok);
+    REQUIRE(parsed.pipe_networks.size() == 1);
+    REQUIRE(parsed.pipe_networks[0].id == 7);
+    REQUIRE(parsed.pipe_networks[0].fluid == "Heavy Oil Residue");
+    REQUIRE(parsed.pipe_networks[0].endpoints.size() == 2); // empty-building endpoint is dropped
+    REQUIRE(parsed.pipe_networks[0].endpoints[0].building == "ref_a");
+    REQUIRE(parsed.pipe_networks[0].endpoints[0].dir == "out");
+    REQUIRE(parsed.pipe_networks[0].endpoints[1].dir == "in");
+}
+
+/// @covers SavImport::BuildGraph places a fluid buffer as a logistics node.
+TEST_CASE("BuildGraph places a Fluid Buffer node", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    parsed.buildings.push_back(FluidBuffer("tank", 0.0f));
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err));
+    REQUIRE(out.nodes.size() == 1);
+    REQUIRE(out.nodes[0]->IsLogistics());
+    const LogisticsNode* l = static_cast<const LogisticsNode*>(out.nodes[0].get());
+    REQUIRE(l->logistics_kind == LogisticsNode::Kind::FluidBuffer);
+    REQUIRE(out.nodes[0]->ins.size() == 1);
+    REQUIRE(out.nodes[0]->outs.size() == 1);
+    REQUIRE(std::string(l->GetDisplayName()) == "Fluid Buffer");
+}
+
+/// @covers SavImport::BuildGraph direct 1:1 pipe link (no manifold node).
+TEST_CASE("BuildGraph wires a 1:1 pipe network directly", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    // Residual Fuel: Heavy Oil Residue -> Fuel (single in, single out).
+    parsed.buildings.push_back(Manufacturer("ref", "Residual Fuel", 0.0f));
+    // Power (Fuel): consumes Fuel.
+    parsed.buildings.push_back(Manufacturer("gen", "Power (Fuel)", 100.0f));
+
+    SavImport::PipeNetwork net;
+    net.id = 1;
+    net.fluid = "Fuel";
+    net.endpoints.push_back({ "ref", "out" });
+    net.endpoints.push_back({ "gen", "in" });
+    parsed.pipe_networks.push_back(net);
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err));
+
+    // No manifold node was created (only the two machines).
+    REQUIRE(out.nodes.size() == 2);
+    // Exactly one pipe link, refinery Fuel output -> generator Fuel input.
+    REQUIRE(out.links.size() == 1);
+    const Pin* start = out.links[0]->start;
+    const Pin* end = out.links[0]->end;
+    REQUIRE(start->item != nullptr);
+    REQUIRE(start->item->name == "Fuel");
+    REQUIRE(start->node->IsCraft());
+    REQUIRE(end->node->IsCraft());
+}
+
+/// @covers SavImport::BuildGraph N:M pipe network -> PipeJunction manifold.
+TEST_CASE("BuildGraph builds a PipeJunction manifold for an N:M pipe network", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    parsed.buildings.push_back(Manufacturer("ref", "Residual Fuel", 0.0f));    // produces Fuel
+    parsed.buildings.push_back(Manufacturer("gen_a", "Power (Fuel)", 100.0f)); // consumes Fuel
+    parsed.buildings.push_back(Manufacturer("gen_b", "Power (Fuel)", 200.0f)); // consumes Fuel
+
+    SavImport::PipeNetwork net;
+    net.id = 1;
+    net.fluid = "Fuel";
+    net.endpoints.push_back({ "ref", "out" });
+    net.endpoints.push_back({ "gen_a", "in" });
+    net.endpoints.push_back({ "gen_b", "in" });
+    parsed.pipe_networks.push_back(net);
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err));
+
+    // 3 machines + 1 manifold node.
+    REQUIRE(out.nodes.size() == 4);
+    const LogisticsNode* junction = nullptr;
+    for (const auto& n : out.nodes)
+    {
+        if (n->IsLogistics()
+            && static_cast<const LogisticsNode*>(n.get())->logistics_kind == LogisticsNode::Kind::PipeJunction)
+        {
+            junction = static_cast<const LogisticsNode*>(n.get());
+        }
+    }
+    REQUIRE(junction != nullptr);
+    REQUIRE(junction->ins.size() == 1);
+    REQUIRE(junction->outs.size() == 2);
+    REQUIRE(junction->ins[0]->item != nullptr);
+    REQUIRE(junction->ins[0]->item->name == "Fuel");
+    // 3 links: ref->junction, junction->gen_a, junction->gen_b.
+    REQUIRE(out.links.size() == 3);
+}
+
+/// @covers SavImport::BuildGraph keeps pipe-junction producer inputs supply-driven.
+TEST_CASE("BuildGraph keeps Water Extractor to PipeJunction links at extractor output rate", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    parsed.buildings.push_back(WaterExtractor("water_a", 0.0f));
+    parsed.buildings.push_back(WaterExtractor("water_b", 100.0f));
+    // Power (Coal) consumes 45 Water/min, which is less than the 240/min supply.
+    parsed.buildings.push_back(Manufacturer("coal_generator", "Power (Coal)", 200.0f));
+
+    SavImport::PipeNetwork net;
+    net.id = 1;
+    net.fluid = "Water";
+    net.endpoints.push_back({ "water_a", "out" });
+    net.endpoints.push_back({ "water_b", "out" });
+    net.endpoints.push_back({ "coal_generator", "in" });
+    parsed.pipe_networks.push_back(net);
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err));
+
+    const LogisticsNode* junction = nullptr;
+    for (const auto& n : out.nodes)
+    {
+        if (n->IsLogistics()
+            && static_cast<const LogisticsNode*>(n.get())->logistics_kind == LogisticsNode::Kind::PipeJunction)
+        {
+            junction = static_cast<const LogisticsNode*>(n.get());
+            break;
+        }
+    }
+    REQUIRE(junction != nullptr);
+    REQUIRE(junction->ins.size() == 2);
+    REQUIRE(junction->ins[0]->current_rate == FractionalNumber(120, 1));
+    REQUIRE(junction->ins[1]->current_rate == FractionalNumber(120, 1));
+    REQUIRE(junction->ins[0]->link != nullptr);
+    REQUIRE(junction->ins[0]->link->start->current_rate == junction->ins[0]->current_rate);
+    REQUIRE(junction->ins[1]->link != nullptr);
+    REQUIRE(junction->ins[1]->link->start->current_rate == junction->ins[1]->current_rate);
+}
+
+/// @covers SavImport::BuildGraph skips a pipe network whose fluid is unknown.
+TEST_CASE("BuildGraph skips a pipe network with unresolved fluid", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    SavImport::ParseResult parsed;
+    parsed.ok = true;
+    parsed.buildings.push_back(Manufacturer("ref", "Residual Fuel", 0.0f));
+    parsed.buildings.push_back(Manufacturer("gen", "Power (Fuel)", 100.0f));
+
+    SavImport::PipeNetwork net;
+    net.id = 1;
+    net.fluid = "Notafluid";
+    net.endpoints.push_back({ "ref", "out" });
+    net.endpoints.push_back({ "gen", "in" });
+    parsed.pipe_networks.push_back(net);
+
+    IdGen ids;
+    SavImport::BuildOutput out;
+    std::string err;
+    REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err));
+
+    REQUIRE(out.links.empty());
+    REQUIRE(HasWarningContaining(out.warnings, "unresolved fluid"));
 }
