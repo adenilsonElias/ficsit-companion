@@ -225,3 +225,8 @@ FractionalNumber ExtractorNode::GetPurityMultiplier() const
     }
     return PurityMultiplier(purity);
 }
+
+bool ExtractorNode::SupportsPurity() const
+{
+    return SpecFor(extractor_kind).supports_purity;
+}

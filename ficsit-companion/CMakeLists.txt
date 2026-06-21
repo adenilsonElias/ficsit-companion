@@ -2,6 +2,7 @@ project(ficsit-companion)
 
 set(HEADER_FILES
 	include/domain/building.hpp
+	include/domain/factory_snapshot_model.hpp
 	include/domain/fractional_number.hpp
 	include/domain/game_data.hpp
 	include/domain/graph_model.hpp
@@ -11,6 +12,7 @@ set(HEADER_FILES
 	include/domain/link.hpp
 	include/domain/node.hpp
 	include/domain/node_data_resolver.hpp
+	include/domain/node_display.hpp
 	include/domain/pin.hpp
 	include/domain/rate_solver.hpp
 	include/domain/recipe.hpp
@@ -23,11 +25,15 @@ set(HEADER_FILES
 	include/infra/sav_import.hpp
 	include/infra/sav_import_service.hpp
 	include/infra/sav_runner.hpp
+	include/infra/factory_snapshot_builder.hpp
+	include/infra/factory_snapshot_session.hpp
+	include/infra/save_source.hpp
 	include/infra/save_watcher.hpp
 	include/infra/session_serializer.hpp
 	include/infra/settings_store.hpp
 	include/infra/vehicle_map_session.hpp
 	include/app/base_app.hpp
+	include/app/factory_snapshot_app.hpp
 	include/app/production_app.hpp
 	include/app/utils.hpp
 	include/app/vehicle_map_app.hpp
@@ -40,6 +46,7 @@ set(HEADER_FILES
 # domain/ : pure logic, zero UI/IO dependencies.
 set(DOMAIN_SOURCE_FILES
     src/domain/building.cpp
+    src/domain/factory_snapshot_model.cpp
     src/domain/fractional_number.cpp
     src/domain/game_data.cpp
     src/domain/graph_model.cpp
@@ -57,6 +64,7 @@ set(DOMAIN_SOURCE_FILES
     src/domain/vehicle_route.cpp
     src/domain/extractor_node.cpp
     src/domain/node_data_resolver.cpp
+    src/domain/node_display.cpp
     src/domain/pin.cpp
     src/domain/rate_solver.cpp
     src/domain/recipe.cpp
@@ -73,6 +81,9 @@ set(INFRA_SOURCE_FILES
     src/infra/sav_import.cpp
     src/infra/sav_import_service.cpp
     src/infra/sav_runner.cpp
+    src/infra/factory_snapshot_builder.cpp
+    src/infra/factory_snapshot_session.cpp
+    src/infra/save_source.cpp
     src/infra/save_watcher.cpp
     src/infra/session_serializer.cpp
     src/infra/settings_store.cpp
@@ -94,6 +105,7 @@ set(APP_SOURCE_FILES
     src/app/production_app.cpp
     src/app/utils.cpp
     src/app/vehicle_map_app.cpp
+    src/app/factory_snapshot_app.cpp
 
     src/app/main.cpp
 )
@@ -108,6 +120,7 @@ set(APP_PROJECT_SOURCES
     src/app/production_app.cpp
     src/app/utils.cpp
     src/app/vehicle_map_app.cpp
+    src/app/factory_snapshot_app.cpp
     src/app/main.cpp
 )
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src FILES
@@ -179,12 +192,15 @@ if (NOT DEFINED EMSCRIPTEN AND TARGET Catch2::Catch2WithMain)
         tests/test_graph_types_link.cpp
         tests/test_file_store.cpp
         tests/test_settings_store.cpp
+        tests/test_save_source.cpp
         tests/test_editor_backend.cpp
         tests/test_rate_solver.cpp
         tests/test_graph_model.cpp
         tests/test_session_serializer.cpp
         tests/test_sav_import.cpp
         tests/test_sav_import_service.cpp
+        tests/test_factory_snapshot_builder.cpp
+        tests/test_factory_snapshot_session.cpp
         tests/test_vehicle_map_camera.cpp
         tests/test_vehicle_map_query.cpp
         tests/test_vehicle_map_session.cpp
@@ -195,6 +211,7 @@ if (NOT DEFINED EMSCRIPTEN AND TARGET Catch2::Catch2WithMain)
         tests/test_linear_solve.cpp
         tests/test_group_node.cpp
         tests/test_resource_flow.cpp
+        tests/test_node_display.cpp
     )
     add_executable(fc-tests ${TEST_SOURCE_FILES})
     set_property(TARGET fc-tests PROPERTY CXX_STANDARD 17)

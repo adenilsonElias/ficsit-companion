@@ -321,6 +321,9 @@ struct ExtractorNode : public PoweredNode
     FractionalNumber GetBaseRate() const;
     /// @brief Purity multiplier (1 for kinds that don't use purity, like Water).
     FractionalNumber GetPurityMultiplier() const;
+    /// @brief Whether this extractor kind has a purity dimension (miners, oil);
+    /// false for the Water Extractor.
+    bool SupportsPurity() const;
 
     ExtractorNode::Kind extractor_kind;
     const Item* resource;

@@ -10,6 +10,7 @@ node_modules/
 
 # Coverage reports (OpenCppCoverage / ctest)
 coverage.xml
+coverage-domain.xml
 coverage-html/
 LastCoverageResults.log
 

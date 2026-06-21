@@ -68,16 +68,9 @@ namespace
 VehicleMapApp::VehicleMapApp()
 {
     LoadSession();
-#if !defined(__EMSCRIPTEN__)
-    if (sav_watch_enabled)
-    {
-        save_watcher.Reconfigure(sav_watch_dir, sav_watch_world);
-        save_watcher.Start();
-    }
-    RefreshDiscoveredWorlds();
-    // The actual re-import of last_sav_path is deferred to the first RenderImpl
-    // frame so the window appears immediately instead of blocking on the parse.
-#endif
+    // .sav loading (folder watching, world filtering) is owned by the shared
+    // AppHost load bar now; this tool only receives parsed saves via
+    // LoadFromWrapperJson.
 }
 
 VehicleMapApp::~VehicleMapApp()
@@ -185,21 +178,12 @@ void VehicleMapApp::SaveSession()
 // Loading
 // ---------------------------------------------------------------------------
 
-void VehicleMapApp::LoadSavFile(const std::string& sav_path)
+void VehicleMapApp::LoadFromWrapperJson(const std::string& wrapper_json,
+                                        const SavImport::BuildOptions& options)
 {
+    (void)options; // logistics parse is layout-independent
     last_error.clear();
-#if defined(__EMSCRIPTEN__)
-    (void)sav_path;
-    last_error = "Loading .sav is not supported on the web build yet";
-#else
-    std::string err;
-    const std::string json = SavRunner::RunSavWrapper(sav_path, node_executable_path, err);
-    if (!err.empty() || json.empty())
-    {
-        last_error = err.empty() ? "Parser produced no output" : err;
-        return;
-    }
-    VehicleMap::Model parsed = VehicleMap::ParseLogisticsJson(json);
+    VehicleMap::Model parsed = VehicleMap::ParseLogisticsJson(wrapper_json);
     if (!parsed.ok)
     {
         last_error = parsed.error.empty() ? "Failed to parse logistics data" : parsed.error;
@@ -207,10 +191,9 @@ void VehicleMapApp::LoadSavFile(const std::string& sav_path)
     }
 
     // Pull the wrapper's logistics warning line(s) for diagnostics.
-    last_warnings = VehicleMap::ExtractLogisticsWarnings(json);
+    last_warnings = VehicleMap::ExtractLogisticsWarnings(wrapper_json);
 
     model = std::move(parsed);
-    last_sav_path = sav_path;
     needs_fit_on_load = !model.has_bounds ? false : true;
 
     // Drop selections that no longer exist.
@@ -221,37 +204,6 @@ void VehicleMapApp::LoadSavFile(const std::string& sav_path)
     st << model.stations.size() << " stations, " << model.vehicles.size()
        << " vehicles, " << model.segments.size() << " path segments";
     status_text = st.str();
-#endif
-}
-
-void VehicleMapApp::DrainPendingImports()
-{
-    std::vector<std::string> pending;
-    save_watcher.TakePending(pending);
-    if (!pending.empty())
-    {
-        LoadSavFile(pending.back());
-    }
-}
-
-void VehicleMapApp::RefreshDiscoveredWorlds()
-{
-    discovered_worlds.clear();
-#if !defined(__EMSCRIPTEN__)
-    std::error_code ec;
-    if (!std::filesystem::is_directory(sav_watch_dir, ec)) return;
-    // Collect .sav stems, then derive distinct world names via the shared,
-    // unit-tested DiscoverWorldNames (same path ProductionApp uses).
-    std::vector<std::string> stems;
-    for (const auto& entry : std::filesystem::directory_iterator(sav_watch_dir, ec))
-    {
-        if (ec) break;
-        if (!entry.is_regular_file()) continue;
-        if (entry.path().extension() != ".sav") continue;
-        stems.push_back(entry.path().stem().string());
-    }
-    discovered_worlds = DiscoverWorldNames(stems);
-#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -346,19 +298,8 @@ bool VehicleMapApp::VehiclePassesFilter(const VehicleMap::Vehicle& ve) const
 
 void VehicleMapApp::RenderImpl()
 {
-#if !defined(__EMSCRIPTEN__)
-    // Deferred initial load: re-import the last save once, on the first frame,
-    // so the window appears before the (multi-second) parse runs.
-    if (!initial_load_done)
-    {
-        initial_load_done = true;
-        if (!last_sav_path.empty() && std::filesystem::exists(last_sav_path))
-        {
-            LoadSavFile(last_sav_path);
-        }
-    }
-    DrainPendingImports();
-#endif
+    // Saves arrive via LoadFromWrapperJson from the shared global load bar; there
+    // is no per-tool load or watch loop here anymore.
     UpdateFlyTo();
 
     // Keyboard shortcuts (when not typing in a text field).
@@ -401,85 +342,15 @@ void VehicleMapApp::RenderLeftPanel()
 
 void VehicleMapApp::RenderLoadSection()
 {
-    if (!ImGui::CollapsingHeader("Load", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    // The .sav load controls live in the single global load bar at the top of the
+    // window (it feeds every tool). This is read-only status for the last import.
+    if (!ImGui::CollapsingHeader("Load status", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
-#if defined(__EMSCRIPTEN__)
-    ImGui::TextWrapped("Loading .sav is desktop-only for now.");
-#else
-    ImGui::TextUnformatted("Save folder:");
-    if (ImGui::InputText("##vm_folder", &sav_watch_dir))
+    if (model.stations.empty() && model.vehicles.empty() && status_text.empty() && last_error.empty())
     {
-        save_watcher.Reconfigure(sav_watch_dir, sav_watch_world);
-        RefreshDiscoveredWorlds();
+        ImGui::TextDisabled("Load a save from the bar above to populate this map.");
+        return;
     }
-
-    const std::string world_label = sav_watch_world.empty()
-        ? std::string("World: (all)")
-        : "World: [" + sav_watch_world + "]";
-    if (ImGui::Button(world_label.c_str()))
-    {
-        RefreshDiscoveredWorlds();
-        ImGui::OpenPopup("##vm_world_popup");
-    }
-    if (ImGui::BeginPopup("##vm_world_popup"))
-    {
-        if (ImGui::MenuItem("(all worlds)", nullptr, sav_watch_world.empty()))
-        {
-            sav_watch_world.clear();
-            save_watcher.Reconfigure(sav_watch_dir, sav_watch_world);
-        }
-        ImGui::Separator();
-        if (discovered_worlds.empty()) ImGui::TextDisabled("No .sav files in folder");
-        for (const std::string& w : discovered_worlds)
-        {
-            if (ImGui::MenuItem(w.c_str(), nullptr, sav_watch_world == w))
-            {
-                sav_watch_world = w;
-                save_watcher.Reconfigure(sav_watch_dir, sav_watch_world);
-            }
-        }
-        ImGui::EndPopup();
-    }
-
-    if (ImGui::Button("Load latest now"))
-    {
-        std::error_code ec;
-        if (std::filesystem::is_directory(sav_watch_dir, ec))
-        {
-            std::filesystem::path best;
-            std::filesystem::file_time_type best_time{};
-            bool found = false;
-            for (const auto& entry : std::filesystem::directory_iterator(sav_watch_dir, ec))
-            {
-                if (ec) break;
-                if (!entry.is_regular_file() || entry.path().extension() != ".sav") continue;
-                if (!sav_watch_world.empty())
-                {
-                    const std::string fn = entry.path().filename().string();
-                    const std::string needle = sav_watch_world + "_";
-                    if (fn.size() < needle.size() || fn.compare(0, needle.size(), needle) != 0) continue;
-                }
-                std::error_code tec;
-                const auto t = std::filesystem::last_write_time(entry.path(), tec);
-                if (tec) continue;
-                if (!found || t > best_time) { best = entry.path(); best_time = t; found = true; }
-            }
-            if (found) LoadSavFile(best.string());
-            else last_error = "No matching .sav files in folder";
-        }
-        else last_error = "Save folder does not exist";
-    }
-    ImGui::SameLine();
-    if (ImGui::Checkbox("Auto-refresh", &sav_watch_enabled))
-    {
-        if (sav_watch_enabled)
-        {
-            save_watcher.Reconfigure(sav_watch_dir, sav_watch_world);
-            save_watcher.Start();
-        }
-        else save_watcher.Stop();
-    }
-#endif
 
     if (!status_text.empty()) ImGui::TextDisabled("%s", status_text.c_str());
     if (!last_error.empty())

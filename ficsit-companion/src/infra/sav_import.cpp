@@ -51,16 +51,19 @@ namespace SavImport
             return belt.src_role == "fuel" || belt.dst_role == "fuel";
         }
 
-        // Lazy-init cache keyed by lowercase display name.
-        // Rebuilt only if Data::Recipes()/Items() pointer-identity changes,
-        // which in practice happens once at startup.
+        // Lazy-init cache keyed by lowercase display name. Rebuilt whenever the
+        // game-data generation changes. NOTE: do NOT key invalidation on the
+        // address of Data::Recipes()/Items() — those are lifetime-static
+        // singletons whose addresses never change, so a reload (which frees and
+        // refills them in place) would leave this cache holding dangling
+        // pointers. Data::Generation() is bumped on every load for exactly this.
         struct LookupCache
         {
             std::mutex mutex;
             std::unordered_map<std::string, const Recipe*> recipe_by_name;
             std::unordered_map<std::string, const Item*> item_by_name;
-            const void* recipes_ptr = nullptr;
-            const void* items_ptr = nullptr;
+            unsigned long long generation = 0;
+            bool built = false;
         };
 
         LookupCache& Cache()
@@ -73,10 +76,8 @@ namespace SavImport
         {
             LookupCache& c = Cache();
             std::lock_guard<std::mutex> lock(c.mutex);
-            const void* current_recipes = static_cast<const void*>(&Data::Recipes());
-            const void* current_items = static_cast<const void*>(&Data::Items());
-            if (c.recipes_ptr == current_recipes && c.items_ptr == current_items
-                && !c.recipe_by_name.empty())
+            const unsigned long long current_generation = Data::Generation();
+            if (c.built && c.generation == current_generation)
             {
                 return;
             }
@@ -96,8 +97,8 @@ namespace SavImport
             {
                 c.item_by_name[ToLower(name)] = item.get();
             }
-            c.recipes_ptr = current_recipes;
-            c.items_ptr = current_items;
+            c.generation = current_generation;
+            c.built = true;
         }
 
         const Recipe* LookupRecipe(const std::string& display_name)

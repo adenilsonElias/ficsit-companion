@@ -11,9 +11,6 @@
 #include "domain/rate_solver.hpp"
 #include "domain/recipe.hpp"
 #include "domain/vehicle_route.hpp"
-#include "infra/sav_import.hpp"
-#include "infra/sav_import_service.hpp"
-#include "infra/sav_runner.hpp"
 #include "app/utils.hpp"
 
 #if !defined(__EMSCRIPTEN__)
@@ -96,13 +93,8 @@ ProductionApp::ProductionApp()
         for (const auto& r : Data::Recipes()) alts.push_back(r.get());
         settings_store->Load(settings, alts);
     }
-
-    save_watcher.Reconfigure(settings.sav_watch_dir, settings.sav_watch_world);
-    RefreshDiscoveredWorlds();
-    if (settings.sav_watch_enabled)
-    {
-        save_watcher.Start();
-    }
+    // The production planner no longer ingests .sav files; importing a save now
+    // lives entirely in the Factory Snapshot tool.
 }
 
 ProductionApp::~ProductionApp()
@@ -685,8 +677,6 @@ void ProductionApp::RenderImpl()
         last_time_saved_session = ImGui::GetTime();
     }
 
-    DrainPendingImports();
-
     if (ImGui::GetTime() - last_time_saved_session > 30.0)
     {
         // We need to update last_time_saved_session here because SaveSession needs
@@ -747,53 +737,6 @@ EM_ASYNC_JS(void, waitForFileInput, (), {
 
     // Wait until the file is ready
     while (!fileReady) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-    }
-});
-
-// Open the .sav file picker, run the bundled save parser, and write the
-// wrapper JSON to /_internal_sav_json. The parser is loaded from
-// /sav_import/web_loader.js (preloaded at build time). If the loader is not
-// available the user is told to run tools/sav_import/wrapper.js manually.
-EM_ASYNC_JS(void, waitForSavFileInput, (), {
-    var done = false;
-    var input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".sav,.json";
-    input.onchange = async function(event) {
-        var file = event.target.files[0];
-        if (!file) { done = true; return; }
-        try {
-            if (file.name.toLowerCase().endsWith(".json")) {
-                // Pre-parsed wrapper output — pass straight through.
-                var text = await file.text();
-                FS.writeFile("/_internal_sav_json", text);
-            } else {
-                // Lazy-load the bundled parser. We expect web_loader.js to
-                // attach a function `window.__ficsitParseSav(arrayBuffer)`
-                // that returns a Promise<string> of wrapper JSON.
-                if (!window.__ficsitParseSav) {
-                    var script = document.createElement("script");
-                    script.src = "sav_import/web_loader.js";
-                    await new Promise(function(res, rej) {
-                        script.onload = res;
-                        script.onerror = function() { rej(new Error("web_loader.js not bundled")); };
-                        document.body.appendChild(script);
-                    });
-                }
-                var buf = await file.arrayBuffer();
-                var json = await window.__ficsitParseSav(buf);
-                FS.writeFile("/_internal_sav_json", json);
-            }
-        } catch (e) {
-            FS.writeFile("/_internal_sav_json", JSON.stringify({ error: String(e) }));
-        }
-        done = true;
-    };
-    input.addEventListener("cancel", (event) => { done = true; });
-    input.click();
-
-    while (!done) {
         await new Promise(resolve => setTimeout(resolve, 100));
     }
 });
@@ -858,26 +801,8 @@ void ProductionApp::RenderLeftPanel()
     {
         ImGui::SetTooltip("%s", "Import a production chain from disk");
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Import .sav"))
-    {
-        waitForSavFileInput();
-        if (std::filesystem::exists("_internal_sav_json"))
-        {
-            std::ifstream f("_internal_sav_json", std::ios::in);
-            const std::string content = std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-            f.close();
-            std::filesystem::remove("_internal_sav_json");
-            if (!content.empty())
-            {
-                ImportSavFromJson(content);
-            }
-        }
-    }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-    {
-        ImGui::SetTooltip("%s", "Import a Satisfactory save file (.sav) or pre-parsed wrapper JSON");
-    }
+    // .sav import now lives in the single global load bar at the top of the
+    // window (it feeds every tool), so there is no per-tool "Import .sav" here.
 #endif
     ImGui::SameLine();
     const float fold_button_size = ImGui::CalcTextSize("<<").x + 2.0f * ImGui::GetStyle().FramePadding.x;
@@ -895,8 +820,6 @@ void ProductionApp::RenderLeftPanel()
     {
         ImGui::SetTooltip("%s", "Fold left panel");
     }
-
-    RenderSavImportSection();
 
     const float save_load_buttons_width = ImGui::CalcTextSize("Save").x + ImGui::CalcTextSize("Load").x + ImGui::GetStyle().FramePadding.x * 4;
     const float input_text_width = ImGui::GetContentRegionAvail().x - save_load_buttons_width - ImGui::GetStyle().ItemSpacing.x * 2;
@@ -3595,346 +3518,4 @@ void ProductionApp::FocusNextSomersloop()
     ax::NodeEditor::NavigateToSelection();
     ax::NodeEditor::DeselectNode(matching_nodes[next_clicked_somersloop % matching_nodes.size()]->id);
     next_clicked_somersloop = (next_clicked_somersloop + 1) % matching_nodes.size();
-}
-
-/******************************************************\
-*                  Save (.sav) import                  *
-\******************************************************/
-
-void ProductionApp::RefreshDiscoveredWorlds()
-{
-    discovered_worlds.clear();
-#if !defined(__EMSCRIPTEN__)
-    if (settings.sav_watch_dir.empty())
-    {
-        return;
-    }
-    std::error_code ec;
-    if (!std::filesystem::is_directory(settings.sav_watch_dir, ec))
-    {
-        return;
-    }
-    std::vector<std::string> stems;
-    for (const auto& entry : std::filesystem::directory_iterator(settings.sav_watch_dir, ec))
-    {
-        if (ec) break;
-        if (!entry.is_regular_file()) continue;
-        if (entry.path().extension() != ".sav") continue;
-
-        stems.push_back(entry.path().stem().string());
-    }
-    discovered_worlds = DiscoverWorldNames(stems);
-#endif
-}
-
-std::string ProductionApp::RunSavParserDesktop(const std::string& sav_path, std::string& err)
-{
-    // Subprocess plumbing lives in SavRunner so the Vehicle Map tool can share it.
-    return SavRunner::RunSavWrapper(sav_path, settings.node_executable_path, err);
-}
-
-void ProductionApp::ImportSavFromJson(const std::string& wrapper_json)
-{
-    SavImport::ParseResult parsed = SavImport::ParseWrapperJson(wrapper_json);
-    if (!parsed.ok)
-    {
-        sav_last_error = parsed.error.empty() ? "Failed to parse wrapper JSON" : parsed.error;
-        return;
-    }
-
-    SavImport::BuildOutput built;
-    std::string err;
-    SavImport::BuildOptions build_options;
-    build_options.layout_mode = settings.sav_import_layout_mode;
-    build_options.world_spacing_scale = settings.sav_import_world_spacing_scale;
-    build_options.connect_vehicle_routes = settings.sav_import_connect_vehicle_routes;
-    if (!SavImport::BuildGraph(parsed,
-            std::bind(&ProductionApp::GetNextId, this),
-            built,
-            err,
-            build_options))
-    {
-        sav_last_error = err.empty() ? "Failed to build graph" : err;
-        return;
-    }
-
-    if (built.nodes.empty())
-    {
-        sav_last_error = "Imported save contained no convertible buildings";
-        return;
-    }
-
-    // Wrap into a fresh GroupNode and append to the canvas.
-    auto group = std::make_unique<GroupNode>(GetNextId(),
-        std::bind(&ProductionApp::GetNextId, this),
-        std::move(built.nodes),
-        std::move(built.links));
-
-    // Position the new group offset from any existing node so it does not
-    // overlap user's current work. Bottom-right of the existing bounding box.
-    float max_x = 0.0f;
-    float max_y = 0.0f;
-    bool has_node = false;
-    for (const auto& n : nodes)
-    {
-        const ImVec2 p = ax::NodeEditor::GetNodePosition(n->id);
-        if (!has_node || p.x > max_x) max_x = p.x;
-        if (!has_node || p.y > max_y) max_y = p.y;
-        has_node = true;
-    }
-    const ImVec2 placement = has_node
-        ? ImVec2(max_x + 400.0f, max_y)
-        : ImVec2(0.0f, 0.0f);
-    group->pos = placement;
-
-    nodes.push_back(std::move(group));
-    ax::NodeEditor::SetNodePosition(nodes.back()->id, placement);
-
-    sav_last_warnings = std::move(built.warnings);
-    if (!sav_last_warnings.empty())
-    {
-        sav_last_error = "Imported with " + std::to_string(sav_last_warnings.size()) + " warning(s)";
-    }
-    else
-    {
-        sav_last_error.clear();
-    }
-    sav_last_import_time = ImGui::GetTime();
-}
-
-void ProductionApp::ImportSavFile(const std::string& sav_path)
-{
-    sav_last_imported_path = sav_path;
-
-#if defined(__EMSCRIPTEN__)
-    (void)sav_path;
-    sav_last_error = "Web build does not import directly from a path (use Import .sav button)";
-#else
-    std::string err;
-    const std::string json = RunSavParserDesktop(sav_path, err);
-    if (!err.empty() || json.empty())
-    {
-        sav_last_error = err.empty() ? "Parser produced no output" : err;
-        return;
-    }
-    ImportSavFromJson(json);
-#endif
-}
-
-void ProductionApp::DrainPendingImports()
-{
-    std::vector<std::string> pending;
-    save_watcher.TakePending(pending);
-    for (const auto& path : pending)
-    {
-        ImportSavFile(path);
-    }
-}
-
-void ProductionApp::RenderSavImportSection()
-{
-    if (!ImGui::CollapsingHeader("Save Import"))
-    {
-        return;
-    }
-
-    ImGui::TextUnformatted("Save folder:");
-    if (ImGui::InputText("##sav_folder", &settings.sav_watch_dir))
-    {
-        settings_store->Save(settings);
-        save_watcher.Reconfigure(settings.sav_watch_dir, settings.sav_watch_world);
-        RefreshDiscoveredWorlds();
-    }
-
-    // World selector
-    const std::string label = settings.sav_watch_world.empty()
-        ? std::string("Select world to track  (all worlds)")
-        : "Select world to track  [" + settings.sav_watch_world + "]";
-    if (ImGui::Button(label.c_str()))
-    {
-        RefreshDiscoveredWorlds();
-        ImGui::OpenPopup("##sav_world_popup");
-    }
-    if (ImGui::BeginPopup("##sav_world_popup"))
-    {
-        if (ImGui::MenuItem("(all worlds)", nullptr, settings.sav_watch_world.empty()))
-        {
-            settings.sav_watch_world.clear();
-            settings_store->Save(settings);
-            save_watcher.Reconfigure(settings.sav_watch_dir, settings.sav_watch_world);
-        }
-        ImGui::Separator();
-        if (discovered_worlds.empty())
-        {
-            ImGui::TextDisabled("No .sav files in folder");
-        }
-        for (const std::string& w : discovered_worlds)
-        {
-            if (ImGui::MenuItem(w.c_str(), nullptr, settings.sav_watch_world == w))
-            {
-                settings.sav_watch_world = w;
-                settings_store->Save(settings);
-                save_watcher.Reconfigure(settings.sav_watch_dir, settings.sav_watch_world);
-            }
-        }
-        ImGui::EndPopup();
-    }
-
-    int layout_mode = settings.sav_import_layout_mode == SavImport::LayoutMode::World ? 1 : 0;
-    if (ImGui::RadioButton("Compact layout", layout_mode == 0))
-    {
-        settings.sav_import_layout_mode = SavImport::LayoutMode::Compact;
-        settings_store->Save(settings);
-    }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("World layout", layout_mode == 1))
-    {
-        settings.sav_import_layout_mode = SavImport::LayoutMode::World;
-        settings_store->Save(settings);
-    }
-    if (settings.sav_import_layout_mode == SavImport::LayoutMode::World)
-    {
-        ImGui::SetNextItemWidth(ImGui::GetTextLineHeightWithSpacing() * 6.0f);
-        if (ImGui::InputFloat("World spacing", &settings.sav_import_world_spacing_scale, 0.01f, 0.05f, "%.3f"))
-        {
-            if (settings.sav_import_world_spacing_scale <= 0.0f)
-            {
-                settings.sav_import_world_spacing_scale = SavImport::kPositionScale;
-            }
-            settings_store->Save(settings);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("%s", "Multiplier applied to .sav world coordinates before placing nodes");
-        }
-    }
-
-    if (ImGui::Checkbox("Connect vehicle routes", &settings.sav_import_connect_vehicle_routes))
-    {
-        settings_store->Save(settings);
-    }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("%s", "Wire truck/train routes as links between stations (loader \xE2\x86\x92 unloader).\nDirection is inferred from each station's belts; ambiguous legs are skipped.");
-    }
-
-#if !defined(__EMSCRIPTEN__)
-    if (ImGui::Checkbox("Auto-import new saves", &settings.sav_watch_enabled))
-    {
-        settings_store->Save(settings);
-        if (settings.sav_watch_enabled)
-        {
-            save_watcher.Reconfigure(settings.sav_watch_dir, settings.sav_watch_world);
-            save_watcher.Start();
-        }
-        else
-        {
-            save_watcher.Stop();
-        }
-    }
-
-    if (ImGui::Button("Import latest now"))
-    {
-        // Pick the most recently modified .sav matching the world filter and import it.
-        std::error_code ec;
-        if (std::filesystem::is_directory(settings.sav_watch_dir, ec))
-        {
-            std::filesystem::path best;
-            std::filesystem::file_time_type best_time{};
-            bool found = false;
-            for (const auto& entry : std::filesystem::directory_iterator(settings.sav_watch_dir, ec))
-            {
-                if (ec) break;
-                if (!entry.is_regular_file()) continue;
-                if (entry.path().extension() != ".sav") continue;
-                if (!settings.sav_watch_world.empty())
-                {
-                    const std::string filename = entry.path().filename().string();
-                    const std::string needle = settings.sav_watch_world + "_";
-                    if (filename.size() < needle.size() ||
-                        filename.compare(0, needle.size(), needle) != 0)
-                    {
-                        continue;
-                    }
-                }
-                std::error_code time_ec;
-                auto t = std::filesystem::last_write_time(entry.path(), time_ec);
-                if (time_ec) continue;
-                if (!found || t > best_time)
-                {
-                    best = entry.path();
-                    best_time = t;
-                    found = true;
-                }
-            }
-            if (found)
-            {
-                ImportSavFile(best.string());
-            }
-            else
-            {
-                sav_last_error = "No matching .sav files in folder";
-            }
-        }
-        else
-        {
-            sav_last_error = "Save folder does not exist";
-        }
-    }
-#endif
-
-    if (!sav_last_imported_path.empty())
-    {
-        ImGui::TextDisabled("Last: %s", sav_last_imported_path.c_str());
-    }
-    if (!sav_last_error.empty())
-    {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", sav_last_error.c_str());
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Copy##sav_err"))
-        {
-            ImGui::SetClipboardText(sav_last_error.c_str());
-        }
-        if (!sav_last_warnings.empty())
-        {
-            ImGui::SameLine();
-            if (ImGui::SmallButton("View warnings##sav_warn"))
-            {
-                ImGui::OpenPopup("Sav Import Warnings");
-            }
-        }
-    }
-
-    if (ImGui::BeginPopup("Sav Import Warnings"))
-    {
-        ImGui::Text("%d warning(s)", static_cast<int>(sav_last_warnings.size()));
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Copy all##sav_warn_all"))
-        {
-            std::string joined;
-            joined.reserve(sav_last_warnings.size() * 64);
-            for (const auto& w : sav_last_warnings)
-            {
-                joined += w;
-                joined += '\n';
-            }
-            ImGui::SetClipboardText(joined.c_str());
-        }
-        ImGui::Separator();
-        const float listing_h = ImGui::GetTextLineHeightWithSpacing() * 20.0f;
-        if (ImGui::BeginChild("##sav_warn_list", ImVec2(600.0f, listing_h)))
-        {
-            ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(sav_last_warnings.size()));
-            while (clipper.Step())
-            {
-                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
-                {
-                    ImGui::TextUnformatted(sav_last_warnings[i].c_str());
-                }
-            }
-        }
-        ImGui::EndChild();
-        ImGui::EndPopup();
-    }
 }

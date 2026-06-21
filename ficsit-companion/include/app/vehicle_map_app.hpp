@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "app/base_app.hpp"
-#include "infra/save_watcher.hpp"
 #include "domain/vehicle_map.hpp"
 #include "domain/vehicle_map_camera.hpp"
 
@@ -23,6 +22,12 @@ public:
     /// @brief Persist camera / selection / filters / watch config (no ImGui context needed).
     virtual void SaveSession() override;
 
+    /// @brief Parse the shared wrapper JSON's logistics block into the map model.
+    /// @param options Shared import options (unused here — the logistics parse is
+    /// layout-independent — but kept for the common BaseApp signature).
+    virtual void LoadFromWrapperJson(const std::string& wrapper_json,
+                                     const SavImport::BuildOptions& options) override;
+
 protected:
     virtual void RenderImpl() override;
 
@@ -32,15 +37,10 @@ private:
     std::string Serialize() const;
     void Deserialize(const std::string& s);
 
-    // ---- Loading ----
-    /// @brief Run wrapper.js on a .sav, parse the logistics block, swap in the model.
-    void LoadSavFile(const std::string& sav_path);
-    /// @brief Drain SaveWatcher-detected autosaves and reload from the newest.
-    void DrainPendingImports();
-    void RefreshDiscoveredWorlds();
-
     // ---- Panels ----
     void RenderLeftPanel();
+    /// @brief Read-only status line for the last shared import. The load controls
+    /// themselves live in the single global load bar (AppHost).
     void RenderLoadSection();
     void RenderFilterBar();
     void RenderEntityLists();
@@ -70,8 +70,6 @@ private:
 private:
     VehicleMap::Model model;
     VehicleMapCamera camera;
-    SaveWatcher save_watcher;
-    std::vector<std::string> discovered_worlds;
 
     // Status / diagnostics.
     std::string last_error;
@@ -101,7 +99,6 @@ private:
     std::string scroll_to_vehicle;
 
     bool needs_fit_on_load = false;
-    bool initial_load_done = false;
 
     // Background map texture (optional; grid fallback if absent).
     unsigned int background_texture = 0;

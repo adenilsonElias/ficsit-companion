@@ -14,8 +14,6 @@
 #include "domain/fractional_number.hpp"
 #include "domain/graph_model.hpp"
 #include "domain/resource_flow.hpp"
-#include "infra/sav_import.hpp"
-#include "infra/save_watcher.hpp"
 #include "infra/session_serializer.hpp"
 #include "infra/settings_store.hpp"
 
@@ -119,30 +117,6 @@ private:
     /// @brief Focus the view on the next node with num somersloop > 0
     void FocusNextSomersloop();
 
-    /// @brief Render the "Save Import" section of the left panel (folder picker,
-    /// world selector, watcher toggle, manual import buttons).
-    void RenderSavImportSection();
-
-    /// @brief Spawn the wrapper.js parser on a .sav file and synchronously
-    /// collect its JSON output (desktop only). Returns empty on failure.
-    std::string RunSavParserDesktop(const std::string& sav_path, std::string& err);
-
-    /// @brief Parse the wrapper JSON, build a GroupNode out of the resulting
-    /// graph and append it to the canvas.
-    void ImportSavFromJson(const std::string& wrapper_json);
-
-    /// @brief Trigger a manual import of the given .sav file. Used by the
-    /// desktop "Import now"/"Browse..." button and by the watcher.
-    void ImportSavFile(const std::string& sav_path);
-
-    /// @brief Drain pending paths from the SaveWatcher and import them.
-    /// Called once per frame.
-    void DrainPendingImports();
-
-    /// @brief Rescan the configured save folder to discover distinct world
-    /// names (used by the "Select world to track" popup).
-    void RefreshDiscoveredWorlds();
-
 private:
     /// @brief Used in saved files to track when format change. Used to update files saved with previous versions
     static constexpr int SAVE_VERSION = 7;
@@ -206,14 +180,4 @@ private:
 
     /// @brief Persistent storage abstraction (DiskFileStore on desktop, WebFileStore on web)
     std::unique_ptr<IFileStore> file_store;
-
-    // Save import state
-    SaveWatcher save_watcher;
-    std::vector<std::string> discovered_worlds;
-    std::string sav_last_imported_path;
-    std::string sav_last_error;
-    /// @brief Full warning list from the last import (each entry is one line).
-    /// Used to drive the "View warnings" popup so the user can copy them.
-    std::vector<std::string> sav_last_warnings;
-    double sav_last_import_time = 0.0;
 };

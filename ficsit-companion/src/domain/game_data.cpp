@@ -16,6 +16,7 @@ namespace Data
         std::unordered_map<std::string, std::unique_ptr<Item>> items;
         std::unordered_map<std::string, std::unique_ptr<Building>> buildings;
         std::vector<std::unique_ptr<Recipe>> recipes;
+        unsigned long long generation = 0;
     }
 
     void LoadData(const std::string& game)
@@ -88,11 +89,20 @@ namespace Data
         std::stable_sort(recipes.begin(), recipes.end(), [](const std::unique_ptr<Recipe>& a, const std::unique_ptr<Recipe>& b) {
             return a->name < b->name;
         });
+
+        // Bump after a successful (re)load so pointer-caching consumers know their
+        // cached Item*/Recipe*/Building* now dangle and must be rebuilt.
+        ++generation;
     }
 
     const std::string& Version()
     {
         return version;
+    }
+
+    unsigned long long Generation()
+    {
+        return generation;
     }
 
     const std::unordered_map<std::string, std::unique_ptr<Item>>& Items()

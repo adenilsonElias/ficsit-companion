@@ -18,6 +18,13 @@ namespace Data
     /// @brief Get the version of the loaded data
     const std::string& Version();
 
+    /// @brief A counter bumped on every LoadData call. The Items()/Buildings()/
+    /// Recipes() containers are lifetime-static singletons whose addresses never
+    /// change, so consumers that cache raw Item*/Recipe*/Building* must compare
+    /// this generation (not container identity) to know when a reload has
+    /// invalidated their cached pointers. Starts at 0 before any load.
+    unsigned long long Generation();
+
     /// @brief Get all known items
     const std::unordered_map<std::string, std::unique_ptr<Item>>& Items();
 
