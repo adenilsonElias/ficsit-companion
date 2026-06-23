@@ -28,10 +28,10 @@
 #include "app/production_app.hpp"
 #include "app/vehicle_map_app.hpp"
 #include "app/factory_snapshot_app.hpp"
-#include "domain/game_data.hpp"
-#include "infra/save_source.hpp"
-#include "infra/save_watcher.hpp"
-#include "infra/sav_runner.hpp"
+#include "domain/gamedata/game_data.hpp"
+#include "infra/saveimport/save_source.hpp"
+#include "infra/saveimport/save_watcher.hpp"
+#include "infra/saveimport/sav_runner.hpp"
 #include <misc/cpp/imgui_stdlib.h>
 #include <algorithm>
 #include <fstream>

@@ -4,10 +4,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include "infra/editor_backend.hpp"
-#include "domain/node.hpp"
-#include "domain/pin.hpp"
-#include "domain/link.hpp"
+#include "infra/ports/editor_backend.hpp"
+#include "domain/nodes/node.hpp"
+#include "domain/graph/pin.hpp"
+#include "domain/graph/link.hpp"
 
 /// @brief Records calls and stores positions so headless tests can drive logic
 /// that would otherwise need a live node-editor context.

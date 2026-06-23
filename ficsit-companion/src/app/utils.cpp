@@ -13,8 +13,8 @@
 #include <SDL_opengl.h>
 #endif
 
-#include "domain/node.hpp"
-#include "domain/recipe.hpp"
+#include "domain/nodes/node.hpp"
+#include "domain/gamedata/recipe.hpp"
 #include "app/utils.hpp"
 
 unsigned int DefaultTexture()

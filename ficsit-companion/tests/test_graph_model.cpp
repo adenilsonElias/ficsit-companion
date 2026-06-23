@@ -1,12 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "domain/graph_model.hpp"
+#include "domain/graph/graph_model.hpp"
 #include "graph_test_helpers.hpp"
-#include "domain/link.hpp"
-#include "domain/node.hpp"
-#include "domain/pin.hpp"
-#include "domain/recipe.hpp" // Item
-#include "domain/vehicle_route.hpp"
+#include "domain/graph/link.hpp"
+#include "domain/nodes/node.hpp"
+#include "domain/graph/pin.hpp"
+#include "domain/gamedata/recipe.hpp" // Item
+#include "domain/vehicle/vehicle_route.hpp"
+
+#include <stdexcept>
 
 namespace
 {
@@ -21,6 +23,21 @@ namespace
         g.nodes.push_back(std::move(s));
         return raw;
     }
+
+    struct ThrowingNode final : Node
+    {
+        ThrowingNode(ax::NodeEditor::NodeId id, const std::function<unsigned long long int()>& id_generator)
+            : Node(id)
+        {
+            outs.emplace_back(std::make_unique<Pin>(
+                id_generator(), ax::NodeEditor::PinKind::Output, this, nullptr));
+        }
+
+        Kind GetKind() const override
+        {
+            throw std::runtime_error("synthetic propagation failure");
+        }
+    };
 }
 
 /// @test   GraphModel hands out monotonically increasing ids — two successive calls differ by one.
@@ -35,6 +52,147 @@ TEST_CASE("GraphModel::GetNextId increments", "[graph_model]")
     const auto second = g.GetNextId();
 
     REQUIRE(second == first + 1);
+}
+
+TEST_CASE("GraphModel::GetNextId resumes from a restored id", "[graph_model]")
+{
+    FakeEditorBackend fake;
+    GraphModel g(fake);
+    g.next_id = 41;
+
+    REQUIRE(g.GetNextId() == 41);
+    REQUIRE(g.GetNextId() == 42);
+}
+
+TEST_CASE("GraphModel::FindPin finds exposed pins and excludes nested group pins", "[graph_model]")
+{
+    FakeEditorBackend fake;
+    GraphModel g(fake);
+    auto gen = [&g] { return g.GetNextId(); };
+    Item plate("Synthetic Plate", "", 2);
+
+    auto splitter = std::make_unique<CustomSplitterNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen, &plate);
+    Pin* splitter_in = splitter->ins[0].get();
+    Pin* splitter_out = splitter->outs[2].get();
+    g.nodes.push_back(std::move(splitter));
+
+    auto station = std::make_unique<VehicleStationNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), LogisticsNode::Kind::TrainStation, gen);
+    Pin* station_plug = station->plug.get();
+    g.nodes.push_back(std::move(station));
+
+    std::vector<std::unique_ptr<Node>> nested_nodes;
+    auto nested_sink = std::make_unique<SinkNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen, &plate);
+    nested_sink->ins[0]->current_rate = FractionalNumber(30, 1);
+    const ax::NodeEditor::PinId nested_pin_id = nested_sink->ins[0]->id;
+    nested_nodes.push_back(std::move(nested_sink));
+    auto group = std::make_unique<GroupNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen, std::move(nested_nodes),
+        std::vector<std::unique_ptr<Link>>{});
+    REQUIRE(group->ins.size() == 1);
+    Pin* group_exposed_in = group->ins[0].get();
+    g.nodes.push_back(std::move(group));
+
+    REQUIRE(g.FindPin(ax::NodeEditor::PinId::Invalid) == nullptr);
+    REQUIRE(g.FindPin(splitter_in->id) == splitter_in);
+    REQUIRE(g.FindPin(splitter_out->id) == splitter_out);
+    REQUIRE(g.FindPin(station_plug->id) == station_plug);
+    REQUIRE(g.FindPin(group_exposed_in->id) == group_exposed_in);
+    REQUIRE(g.FindPin(nested_pin_id) == nullptr);
+    REQUIRE(g.FindPin(ax::NodeEditor::PinId(999999)) == nullptr);
+}
+
+TEST_CASE("GraphModel::CreateLink restore mode normalizes direction without solving", "[graph_model]")
+{
+    FakeEditorBackend fake;
+    GraphModel g(fake);
+    auto gen = [&g] { return g.GetNextId(); };
+    Item plate("Synthetic Plate", "", 2);
+
+    auto source = std::make_unique<CustomSplitterNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen, &plate);
+    auto sink = std::make_unique<SinkNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen);
+    Pin* source_out = source->outs[0].get();
+    Pin* sink_in = sink->ins[0].get();
+    source_out->current_rate = FractionalNumber(60, 1);
+    sink_in->current_rate = FractionalNumber(10, 1);
+    source_out->SetLocked(true);
+    g.nodes.push_back(std::move(source));
+    g.nodes.push_back(std::move(sink));
+
+    float error_time = 7.0f;
+    g.CreateLink(sink_in, source_out, false, error_time, 3.0f);
+
+    REQUIRE(g.links.size() == 1);
+    REQUIRE(g.links[0]->start == source_out);
+    REQUIRE(g.links[0]->end == sink_in);
+    REQUIRE(source_out->link == g.links[0].get());
+    REQUIRE(sink_in->link == g.links[0].get());
+    REQUIRE(source_out->current_rate == FractionalNumber(60, 1));
+    REQUIRE(sink_in->current_rate == FractionalNumber(10, 1));
+    REQUIRE(source_out->GetLocked());
+    REQUIRE(sink_in->GetLocked());
+    REQUIRE(sink_in->item == &plate);
+    REQUIRE(error_time == 7.0f);
+}
+
+TEST_CASE("GraphModel::CreateLink removes a rejected ordinary link", "[graph_model]")
+{
+    FakeEditorBackend fake;
+    GraphModel g(fake);
+    auto gen = [&g] { return g.GetNextId(); };
+
+    auto source = std::make_unique<MergerNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen);
+    auto sink = std::make_unique<SinkNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen);
+    Pin* source_out = source->outs[0].get();
+    Pin* locked_input = source->ins[0].get();
+    Pin* sink_in = sink->ins[0].get();
+    source_out->current_rate = FractionalNumber(10, 1);
+    locked_input->current_rate = FractionalNumber(100, 1);
+    locked_input->SetLocked(true);
+    g.nodes.push_back(std::move(source));
+    g.nodes.push_back(std::move(sink));
+
+    float error_time = 0.0f;
+    g.CreateLink(source_out, sink_in, true, error_time, 2.0f);
+
+    REQUIRE(g.links.empty());
+    REQUIRE(source_out->link == nullptr);
+    REQUIRE(sink_in->link == nullptr);
+    REQUIRE(fake.deleted_links.size() == 1);
+    REQUIRE(error_time == 2.0f);
+    REQUIRE(locked_input->current_rate == FractionalNumber(100, 1));
+}
+
+TEST_CASE("GraphModel::CreateLink cleans up after a propagation exception", "[graph_model]")
+{
+    FakeEditorBackend fake;
+    GraphModel g(fake);
+    auto gen = [&g] { return g.GetNextId(); };
+
+    auto source = std::make_unique<ThrowingNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen);
+    auto sink = std::make_unique<SinkNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen);
+    Pin* source_out = source->outs[0].get();
+    Pin* sink_in = sink->ins[0].get();
+    source_out->current_rate = FractionalNumber(10, 1);
+    g.nodes.push_back(std::move(source));
+    g.nodes.push_back(std::move(sink));
+
+    float error_time = 0.0f;
+    g.CreateLink(source_out, sink_in, true, error_time, 2.5f);
+
+    REQUIRE(g.links.empty());
+    REQUIRE(source_out->link == nullptr);
+    REQUIRE(sink_in->link == nullptr);
+    REQUIRE(fake.deleted_links.size() == 1);
+    REQUIRE(error_time == 2.5f);
 }
 
 /// @test   Deleting a node also tears down every link touching it: the node leaves the model, the
@@ -288,4 +446,180 @@ TEST_CASE("GraphModel::DeleteLink re-settles the surviving route pool", "[graph_
     REQUIRE(bal[0].supply == bal[0].demand);
     // Detached B is untouched.
     REQUIRE(B->ins[0]->current_rate == FractionalNumber(40, 1));
+}
+
+TEST_CASE("GraphModel::DeleteLink reports a miss without mutating the graph", "[graph_model]")
+{
+    FakeEditorBackend fake;
+    GraphModel g(fake);
+    auto gen = [&g] { return g.GetNextId(); };
+    auto storage = std::make_unique<LogisticsNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), LogisticsNode::Kind::Storage, 1, 1, gen);
+    g.nodes.push_back(std::move(storage));
+
+    g.DeleteLink(ax::NodeEditor::LinkId(700));
+
+    REQUIRE(g.nodes.size() == 1);
+    REQUIRE(g.links.empty());
+    REQUIRE(fake.deleted_links == std::vector<ax::NodeEditor::LinkId>{ax::NodeEditor::LinkId(700)});
+}
+
+TEST_CASE("GraphModel::DeleteLink clears endpoint-specific state", "[graph_model]")
+{
+    Item plate("Synthetic Plate", "", 2);
+
+    SECTION("logistics source and sink destination")
+    {
+        FakeEditorBackend fake;
+        GraphModel g(fake);
+        auto gen = [&g] { return g.GetNextId(); };
+        auto source = std::make_unique<LogisticsNode>(
+            ax::NodeEditor::NodeId(g.GetNextId()), LogisticsNode::Kind::Storage, 1, 1, gen);
+        auto sink = std::make_unique<SinkNode>(
+            ax::NodeEditor::NodeId(g.GetNextId()), gen, &plate);
+        Pin* source_out = source->outs[0].get();
+        Pin* sink_in = sink->ins[0].get();
+        source_out->item = &plate;
+        source_out->current_rate = FractionalNumber(60, 1);
+        sink_in->current_rate = FractionalNumber(60, 1);
+        g.nodes.push_back(std::move(source));
+        g.nodes.push_back(std::move(sink));
+        g.links.push_back(MakeLink(701, source_out, sink_in));
+
+        g.DeleteLink(ax::NodeEditor::LinkId(701));
+
+        REQUIRE(source_out->link == nullptr);
+        REQUIRE(source_out->item == nullptr);
+        REQUIRE(source_out->current_rate == FractionalNumber(0, 1));
+        REQUIRE(sink_in->link == nullptr);
+        REQUIRE(sink_in->item == nullptr);
+        REQUIRE(sink_in->current_rate == FractionalNumber(0, 1));
+        REQUIRE(g.links.empty());
+    }
+
+    SECTION("organizer endpoints drop an unforced item")
+    {
+        FakeEditorBackend fake;
+        GraphModel g(fake);
+        auto gen = [&g] { return g.GetNextId(); };
+        auto splitter = std::make_unique<CustomSplitterNode>(
+            ax::NodeEditor::NodeId(g.GetNextId()), gen, &plate);
+        auto merger = std::make_unique<MergerNode>(
+            ax::NodeEditor::NodeId(g.GetNextId()), gen, &plate);
+        CustomSplitterNode* splitter_raw = splitter.get();
+        MergerNode* merger_raw = merger.get();
+        Pin* source_out = splitter->outs[0].get();
+        Pin* merger_in = merger->ins[0].get();
+        g.nodes.push_back(std::move(splitter));
+        g.nodes.push_back(std::move(merger));
+        g.links.push_back(MakeLink(702, source_out, merger_in));
+
+        g.DeleteLink(ax::NodeEditor::LinkId(702));
+
+        REQUIRE(splitter_raw->item == nullptr);
+        REQUIRE(merger_raw->item == nullptr);
+        REQUIRE(source_out->link == nullptr);
+        REQUIRE(merger_in->link == nullptr);
+    }
+
+    SECTION("logistics destination clears its input")
+    {
+        FakeEditorBackend fake;
+        GraphModel g(fake);
+        auto gen = [&g] { return g.GetNextId(); };
+        auto splitter = std::make_unique<CustomSplitterNode>(
+            ax::NodeEditor::NodeId(g.GetNextId()), gen, &plate);
+        auto storage = std::make_unique<LogisticsNode>(
+            ax::NodeEditor::NodeId(g.GetNextId()), LogisticsNode::Kind::Storage, 1, 1, gen);
+        Pin* source_out = splitter->outs[0].get();
+        Pin* storage_in = storage->ins[0].get();
+        storage_in->item = &plate;
+        storage_in->current_rate = FractionalNumber(25, 1);
+        g.nodes.push_back(std::move(splitter));
+        g.nodes.push_back(std::move(storage));
+        g.links.push_back(MakeLink(703, source_out, storage_in));
+
+        g.DeleteLink(ax::NodeEditor::LinkId(703));
+
+        REQUIRE(storage_in->link == nullptr);
+        REQUIRE(storage_in->item == nullptr);
+        REQUIRE(storage_in->current_rate == FractionalNumber(0, 1));
+    }
+}
+
+TEST_CASE("GraphModel::DeleteNode reports a miss to the backend", "[graph_model]")
+{
+    FakeEditorBackend fake;
+    GraphModel g(fake);
+    auto gen = [&g] { return g.GetNextId(); };
+    auto storage = std::make_unique<LogisticsNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), LogisticsNode::Kind::Storage, 1, 1, gen);
+    const ax::NodeEditor::NodeId existing_id = storage->id;
+    g.nodes.push_back(std::move(storage));
+
+    g.DeleteNode(ax::NodeEditor::NodeId(800));
+
+    REQUIRE(g.nodes.size() == 1);
+    REQUIRE(g.nodes[0]->id == existing_id);
+    REQUIRE(fake.deleted_nodes == std::vector<ax::NodeEditor::NodeId>{ax::NodeEditor::NodeId(800)});
+    REQUIRE(fake.deleted_links.empty());
+}
+
+TEST_CASE("GraphModel::DeleteNode removes incoming and outgoing links", "[graph_model]")
+{
+    FakeEditorBackend fake;
+    GraphModel g(fake);
+    auto gen = [&g] { return g.GetNextId(); };
+
+    auto source = std::make_unique<CustomSplitterNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen);
+    auto storage = std::make_unique<LogisticsNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), LogisticsNode::Kind::Storage, 1, 1, gen);
+    auto sink = std::make_unique<SinkNode>(
+        ax::NodeEditor::NodeId(g.GetNextId()), gen);
+    Pin* source_out = source->outs[0].get();
+    Pin* storage_in = storage->ins[0].get();
+    Pin* storage_out = storage->outs[0].get();
+    Pin* sink_in = sink->ins[0].get();
+    const ax::NodeEditor::NodeId storage_id = storage->id;
+    g.nodes.push_back(std::move(source));
+    g.nodes.push_back(std::move(storage));
+    g.nodes.push_back(std::move(sink));
+    g.links.push_back(MakeLink(801, source_out, storage_in));
+    g.links.push_back(MakeLink(802, storage_out, sink_in));
+
+    g.DeleteNode(storage_id);
+
+    REQUIRE(g.nodes.size() == 2);
+    REQUIRE(g.links.empty());
+    REQUIRE(source_out->link == nullptr);
+    REQUIRE(sink_in->link == nullptr);
+    REQUIRE(fake.deleted_nodes == std::vector<ax::NodeEditor::NodeId>{storage_id});
+    REQUIRE(fake.deleted_links == std::vector<ax::NodeEditor::LinkId>{
+        ax::NodeEditor::LinkId(801), ax::NodeEditor::LinkId(802)});
+}
+
+TEST_CASE("GraphModel::DeleteNode removes every vehicle route link", "[graph_model][vehicle_route]")
+{
+    FakeEditorBackend fake;
+    GraphModel g(fake);
+    VehicleStationNode* loader = AddStation(g, VehicleStationNode::Mode::Load);
+    VehicleStationNode* first_unloader = AddStation(g, VehicleStationNode::Mode::Unload);
+    VehicleStationNode* second_unloader = AddStation(g, VehicleStationNode::Mode::Unload);
+    float error_time = 0.0f;
+    g.CreateLink(loader->plug.get(), first_unloader->plug.get(), false, error_time, 1.0f);
+    g.CreateLink(loader->plug.get(), second_unloader->plug.get(), false, error_time, 1.0f);
+    const ax::NodeEditor::NodeId loader_id = loader->id;
+    const ax::NodeEditor::LinkId first_link_id = loader->route_links[0]->id;
+    const ax::NodeEditor::LinkId second_link_id = loader->route_links[1]->id;
+
+    g.DeleteNode(loader_id);
+
+    REQUIRE(g.nodes.size() == 2);
+    REQUIRE(g.links.empty());
+    REQUIRE(first_unloader->route_links.empty());
+    REQUIRE(second_unloader->route_links.empty());
+    REQUIRE(fake.deleted_nodes == std::vector<ax::NodeEditor::NodeId>{loader_id});
+    REQUIRE(fake.deleted_links == std::vector<ax::NodeEditor::LinkId>{
+        first_link_id, second_link_id});
 }

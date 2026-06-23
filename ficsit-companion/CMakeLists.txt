@@ -1,37 +1,37 @@
 project(ficsit-companion)
 
 set(HEADER_FILES
-	include/domain/building.hpp
-	include/domain/factory_snapshot_model.hpp
-	include/domain/fractional_number.hpp
-	include/domain/game_data.hpp
-	include/domain/graph_model.hpp
-	include/domain/graph_item_resolve.hpp
-	include/domain/json.hpp
-	include/domain/linear_solve.hpp
-	include/domain/link.hpp
-	include/domain/node.hpp
-	include/domain/node_data_resolver.hpp
-	include/domain/node_display.hpp
-	include/domain/pin.hpp
-	include/domain/rate_solver.hpp
-	include/domain/recipe.hpp
-	include/domain/resource_flow.hpp
-	include/domain/vehicle_map.hpp
-	include/domain/vehicle_map_camera.hpp
-	include/domain/vehicle_map_query.hpp
-	include/infra/editor_backend.hpp
-	include/infra/file_store.hpp
-	include/infra/sav_import.hpp
-	include/infra/sav_import_service.hpp
-	include/infra/sav_runner.hpp
-	include/infra/factory_snapshot_builder.hpp
-	include/infra/factory_snapshot_session.hpp
-	include/infra/save_source.hpp
-	include/infra/save_watcher.hpp
-	include/infra/session_serializer.hpp
-	include/infra/settings_store.hpp
-	include/infra/vehicle_map_session.hpp
+	include/domain/gamedata/building.hpp
+	include/domain/snapshot/factory_snapshot_model.hpp
+	include/domain/core/fractional_number.hpp
+	include/domain/gamedata/game_data.hpp
+	include/domain/graph/graph_model.hpp
+	include/domain/graph/graph_item_resolve.hpp
+	include/domain/core/json.hpp
+	include/domain/solver/linear_solve.hpp
+	include/domain/graph/link.hpp
+	include/domain/nodes/node.hpp
+	include/domain/nodes/node_data_resolver.hpp
+	include/domain/nodes/node_display.hpp
+	include/domain/graph/pin.hpp
+	include/domain/solver/rate_solver.hpp
+	include/domain/gamedata/recipe.hpp
+	include/domain/snapshot/resource_flow.hpp
+	include/domain/vehicle/vehicle_map.hpp
+	include/domain/vehicle/vehicle_map_camera.hpp
+	include/domain/vehicle/vehicle_map_query.hpp
+	include/infra/ports/editor_backend.hpp
+	include/infra/ports/file_store.hpp
+	include/infra/saveimport/sav_import.hpp
+	include/infra/saveimport/sav_import_service.hpp
+	include/infra/saveimport/sav_runner.hpp
+	include/infra/saveimport/factory_snapshot_builder.hpp
+	include/infra/persistence/factory_snapshot_session.hpp
+	include/infra/saveimport/save_source.hpp
+	include/infra/saveimport/save_watcher.hpp
+	include/infra/persistence/session_serializer.hpp
+	include/infra/persistence/settings_store.hpp
+	include/infra/persistence/vehicle_map_session.hpp
 	include/app/base_app.hpp
 	include/app/factory_snapshot_app.hpp
 	include/app/production_app.hpp
@@ -45,54 +45,59 @@ set(HEADER_FILES
 # documents the dependency rule (infra may depend on domain, never the reverse).
 # domain/ : pure logic, zero UI/IO dependencies.
 set(DOMAIN_SOURCE_FILES
-    src/domain/building.cpp
-    src/domain/factory_snapshot_model.cpp
-    src/domain/fractional_number.cpp
-    src/domain/game_data.cpp
-    src/domain/graph_model.cpp
-    src/domain/graph_item_resolve.cpp
-    src/domain/json.cpp
-    src/domain/linear_solve.cpp
-    src/domain/link.cpp
-    src/domain/node_base.cpp
-    src/domain/craft_node.cpp
-    src/domain/group_node.cpp
-    src/domain/organizer_nodes.cpp
-    src/domain/sink_node.cpp
-    src/domain/logistics_node.cpp
-    src/domain/vehicle_station_node.cpp
-    src/domain/vehicle_route.cpp
-    src/domain/extractor_node.cpp
-    src/domain/node_data_resolver.cpp
-    src/domain/node_display.cpp
-    src/domain/pin.cpp
-    src/domain/rate_solver.cpp
-    src/domain/recipe.cpp
-    src/domain/resource_flow.cpp
-    src/domain/vehicle_map.cpp
-    src/domain/vehicle_map_camera.cpp
-    src/domain/vehicle_map_query.cpp
+    src/domain/gamedata/building.cpp
+    src/domain/snapshot/factory_snapshot_model.cpp
+    src/domain/core/fractional_number.cpp
+    src/domain/gamedata/game_data.cpp
+    src/domain/graph/graph_model.cpp
+    src/domain/graph/graph_item_resolve.cpp
+    src/domain/core/json.cpp
+    src/domain/solver/linear_solve.cpp
+    src/domain/graph/link.cpp
+    src/domain/nodes/node_base.cpp
+    src/domain/nodes/craft_node.cpp
+    src/domain/nodes/group_node.cpp
+    src/domain/nodes/organizer_nodes.cpp
+    src/domain/nodes/sink_node.cpp
+    src/domain/nodes/logistics_node.cpp
+    src/domain/nodes/vehicle_station_node.cpp
+    src/domain/vehicle/vehicle_route.cpp
+    src/domain/nodes/extractor_node.cpp
+    src/domain/nodes/node_data_resolver.cpp
+    src/domain/nodes/node_display.cpp
+    src/domain/graph/pin.cpp
+    src/domain/solver/rate_solver.cpp
+    src/domain/solver/rate_solver_apply.cpp
+    src/domain/solver/rate_solver_seed.cpp
+    src/domain/solver/rate_solver_system.cpp
+    src/domain/solver/rate_solver_variables.cpp
+    src/domain/gamedata/recipe.cpp
+    src/domain/snapshot/resource_flow.cpp
+    src/domain/vehicle/vehicle_map.cpp
+    src/domain/vehicle/vehicle_map_camera.cpp
+    src/domain/vehicle/vehicle_map_query.cpp
 )
 
 # infra/ : ports + adapters (file I/O, editor backend, serialization, sav import).
 set(INFRA_SOURCE_FILES
-    src/infra/editor_backend.cpp
-    src/infra/file_store.cpp
-    src/infra/sav_import.cpp
-    src/infra/sav_import_service.cpp
-    src/infra/sav_runner.cpp
-    src/infra/factory_snapshot_builder.cpp
-    src/infra/factory_snapshot_session.cpp
-    src/infra/save_source.cpp
-    src/infra/save_watcher.cpp
-    src/infra/session_serializer.cpp
-    src/infra/settings_store.cpp
-    src/infra/vehicle_map_session.cpp
+    src/infra/ports/editor_backend.cpp
+    src/infra/ports/file_store.cpp
+    src/infra/saveimport/sav_import.cpp
+    src/infra/saveimport/sav_import_service.cpp
+    src/infra/saveimport/sav_runner.cpp
+    src/infra/saveimport/factory_snapshot_builder.cpp
+    src/infra/persistence/factory_snapshot_session.cpp
+    src/infra/saveimport/save_source.cpp
+    src/infra/saveimport/save_watcher.cpp
+    src/infra/persistence/session_serializer.cpp
+    src/infra/persistence/settings_store.cpp
+    src/infra/persistence/vehicle_map_session.cpp
 )
 
 add_library(fc-core STATIC ${DOMAIN_SOURCE_FILES} ${INFRA_SOURCE_FILES})
 set_property(TARGET fc-core PROPERTY CXX_STANDARD 17)
 target_include_directories(fc-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(fc-core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(fc-core PUBLIC ${imgui_INCLUDE_FOLDERS})
 
 # --- ficsit-companion executable: rendering + main + utils (needs SDL/OpenGL) ---
@@ -195,7 +200,12 @@ if (NOT DEFINED EMSCRIPTEN AND TARGET Catch2::Catch2WithMain)
         tests/test_save_source.cpp
         tests/test_editor_backend.cpp
         tests/test_rate_solver.cpp
+        tests/test_graph_item_resolve.cpp
+        tests/test_recipe.cpp
+        tests/test_pin.cpp
         tests/test_graph_model.cpp
+        tests/test_json.cpp
+        tests/test_fractional_number.cpp
         tests/test_session_serializer.cpp
         tests/test_sav_import.cpp
         tests/test_sav_import_service.cpp
@@ -212,10 +222,12 @@ if (NOT DEFINED EMSCRIPTEN AND TARGET Catch2::Catch2WithMain)
         tests/test_group_node.cpp
         tests/test_resource_flow.cpp
         tests/test_node_display.cpp
+        tests/test_rate_solver_phases.cpp
     )
     add_executable(fc-tests ${TEST_SOURCE_FILES})
     set_property(TARGET fc-tests PROPERTY CXX_STANDARD 17)
     target_include_directories(fc-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    target_include_directories(fc-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
     # Non-backend imgui + node-editor sources are needed because fc-core types
     # (FractionalNumber::RenderInputText, Recipe::Render, etc.) reference ImGui

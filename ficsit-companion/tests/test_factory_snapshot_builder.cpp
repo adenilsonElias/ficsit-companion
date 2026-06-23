@@ -6,13 +6,13 @@
 #include <utility>
 #include <vector>
 
-#include "domain/factory_snapshot_model.hpp"
-#include "domain/game_data.hpp"
-#include "domain/graph_model.hpp"
-#include "domain/node.hpp"
-#include "domain/resource_flow.hpp"
-#include "infra/factory_snapshot_builder.hpp"
-#include "infra/sav_import.hpp"
+#include "domain/snapshot/factory_snapshot_model.hpp"
+#include "domain/gamedata/game_data.hpp"
+#include "domain/graph/graph_model.hpp"
+#include "domain/nodes/node.hpp"
+#include "domain/snapshot/resource_flow.hpp"
+#include "infra/saveimport/factory_snapshot_builder.hpp"
+#include "infra/saveimport/sav_import.hpp"
 
 #include "graph_test_helpers.hpp" // IdGen, FakeEditorBackend
 

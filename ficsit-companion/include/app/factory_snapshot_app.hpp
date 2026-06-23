@@ -5,9 +5,9 @@
 #include <imgui_node_editor.h>
 
 #include "app/base_app.hpp"
-#include "domain/factory_snapshot_model.hpp"
-#include "domain/node_display.hpp"
-#include "infra/factory_snapshot_session.hpp"
+#include "domain/snapshot/factory_snapshot_model.hpp"
+#include "domain/nodes/node_display.hpp"
+#include "infra/persistence/factory_snapshot_session.hpp"
 
 /// @brief Third top-level tool: a read-only view of the imported `.sav` factory.
 /// It owns a FactorySnapshotModel built from the shared wrapper JSON and renders

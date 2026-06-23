@@ -13,13 +13,13 @@
 #include <filesystem>
 #endif
 
-#include "domain/link.hpp"          // full definition for unique_ptr<Link> destruction
-#include "domain/node.hpp"
-#include "domain/pin.hpp"
-#include "domain/node_display.hpp"
-#include "domain/recipe.hpp"        // Item::name
-#include "domain/resource_flow.hpp"
-#include "infra/factory_snapshot_builder.hpp"
+#include "domain/graph/link.hpp"          // full definition for unique_ptr<Link> destruction
+#include "domain/nodes/node.hpp"
+#include "domain/graph/pin.hpp"
+#include "domain/nodes/node_display.hpp"
+#include "domain/gamedata/recipe.hpp"        // Item::name
+#include "domain/snapshot/resource_flow.hpp"
+#include "infra/saveimport/factory_snapshot_builder.hpp"
 
 namespace
 {
@@ -60,6 +60,24 @@ namespace
     {
         const std::string item = pin.item ? pin.item->name : std::string("(none)");
         return item + "  " + pin.current_rate.GetStringFloat() + "/min";
+    }
+
+    // Rate value only (no item name), used to flank the resource icon in the
+    // collapsed/zoomed-out view: input values on the left, output on the right.
+    std::string PinRate(Pin& pin)
+    {
+        return pin.current_rate.GetStringFloat() + "/min";
+    }
+
+    // Sum of every pin's rate in a list, as a single "/min" string. Used in the
+    // collapsed/zoomed-out view to show one aggregated number per side.
+    template <typename PinList>
+    std::string TotalRate(const PinList& pins)
+    {
+        FractionalNumber total{ 0, 1 };
+        for (const auto& pin : pins)
+            total += pin->current_rate;
+        return total.GetStringFloat() + "/min";
     }
 
     const char* KindLabel(Node::Kind kind)
@@ -134,6 +152,14 @@ FactorySnapshotApp::FactorySnapshotApp()
     LoadSession();
     config.SettingsFile = nullptr;     // no on-disk layout file
     config.EnableSmoothZoom = true;
+    // Triple the zoom-out range vs. the editor default (which bottoms out at
+    // 0.1 scale) by prepending three further-out steps down to ~0.033 scale.
+    // CustomZoomLevels is referenced by pointer by the editor, so it must be
+    // populated before CreateEditor and outlive the context (it is a member).
+    for (const float level : { 0.033f, 0.05f, 0.075f,
+                               0.1f, 0.15f, 0.20f, 0.25f, 0.33f, 0.5f, 0.75f,
+                               1.0f, 1.25f, 1.50f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f })
+        config.CustomZoomLevels.push_back(level);
     context = ax::NodeEditor::CreateEditor(&config);
 }
 
@@ -294,6 +320,11 @@ void FactorySnapshotApp::RenderOptionsPanel()
     ImGui::SetNextItemWidth(-FLT_MIN);
     changed |= ImGui::SliderFloat("##snapshot_icon_scale", &session.icon_scale, 0.5f, 4.0f, "%.2fx");
 
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Zoom-out number font size");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    changed |= ImGui::SliderFloat("##snapshot_collapsed_font_scale", &session.collapsed_font_scale, 0.5f, 3.0f, "%.2fx");
+
     if (changed) SaveSession();
 
     ImGui::Spacing();
@@ -301,6 +332,7 @@ void FactorySnapshotApp::RenderOptionsPanel()
     {
         session.node_font_scale = 1.0f;
         session.icon_scale = 1.0f;
+        session.collapsed_font_scale = 1.0f;
         SaveSession();
     }
 }
@@ -502,7 +534,18 @@ void FactorySnapshotApp::RenderSnapshotNodeDetailed(const Node& node)
 
 void FactorySnapshotApp::RenderSnapshotNodeCollapsed(const Node& node, SnapshotCategory category, float zoom)
 {
-    // Inputs: submit each pin as a 1px marker (no label) so links keep attaching.
+    // Text in node-space shrinks on screen as the view zooms out, so grow the font
+    // with the same factor used for the collapsed icon to keep the rate values
+    // readable. The collapsed numbers have their own Options > "Zoom-out number font
+    // size" (session.collapsed_font_scale), independent of the detailed-view "Box font
+    // size". Restore node_font_scale (applied by the node pass) on exit so following
+    // detailed nodes keep that setting.
+    const float text_scale = session.collapsed_font_scale * std::clamp(zoom, 1.0f, kMaxIconScale);
+    ImGui::SetWindowFontScale(text_scale);
+
+    // Inputs: one aggregated rate value on the LEFT of the resource icon. Each pin is
+    // still submitted as a 1px marker (stacked at the group's left edge) so links keep
+    // attaching, but only the summed total is shown.
     ImGui::BeginGroup();
     for (const auto& pin : node.ins)
     {
@@ -511,6 +554,11 @@ void FactorySnapshotApp::RenderSnapshotNodeCollapsed(const Node& node, SnapshotC
         ax::NodeEditor::EndPin();
     }
     ImGui::EndGroup();
+    if (!node.ins.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextUnformatted(TotalRate(node.ins).c_str());
+    }
     ImGui::SameLine();
 
     // Body: a large, roughly screen-constant item icon, or a category glyph when
@@ -535,7 +583,14 @@ void FactorySnapshotApp::RenderSnapshotNodeCollapsed(const Node& node, SnapshotC
 
     ImGui::SameLine();
 
-    // Outputs: 1px markers on the right.
+    // Outputs: one aggregated rate value on the RIGHT of the resource icon. Each pin is
+    // still submitted as a 1px marker (stacked at the group's right edge) so links keep
+    // attaching, but only the summed total is shown.
+    if (!node.outs.empty())
+    {
+        ImGui::TextUnformatted(TotalRate(node.outs).c_str());
+        ImGui::SameLine();
+    }
     ImGui::BeginGroup();
     for (const auto& pin : node.outs)
     {
@@ -562,6 +617,8 @@ void FactorySnapshotApp::RenderSnapshotNodeCollapsed(const Node& node, SnapshotC
             }
         }
     }
+
+    ImGui::SetWindowFontScale(session.node_font_scale);
 }
 
 void FactorySnapshotApp::RenderSnapshotLinks()

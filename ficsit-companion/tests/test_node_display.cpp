@@ -3,9 +3,9 @@
 #include <memory>
 #include <vector>
 
-#include "domain/node.hpp"
-#include "domain/node_display.hpp"
-#include "domain/recipe.hpp" // Item
+#include "domain/nodes/node.hpp"
+#include "domain/nodes/node_display.hpp"
+#include "domain/gamedata/recipe.hpp" // Item
 
 namespace
 {

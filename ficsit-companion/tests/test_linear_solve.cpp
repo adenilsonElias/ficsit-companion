@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "domain/linear_solve.hpp"
-#include "domain/fractional_number.hpp"
+#include "domain/solver/linear_solve.hpp"
+#include "domain/core/fractional_number.hpp"
 
 #include <vector>
 

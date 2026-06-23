@@ -9,8 +9,7 @@ node_modules/
 *.sav
 
 # Coverage reports (OpenCppCoverage / ctest)
-coverage.xml
-coverage-domain.xml
+coverage*.xml
 coverage-html/
 LastCoverageResults.log
 
@@ -24,6 +23,9 @@ scratch/
 /import_dbg.json
 /verify_imp.json
 wrong_connection*.png
+
+# Generated code-review scratch (requesting-code-review workflow)
+*-review-package.diff
 
 # Windows / Visual Studio / editor cruft
 .vs/

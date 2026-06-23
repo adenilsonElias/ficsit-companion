@@ -1,9 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "domain/fractional_number.hpp"
-#include "domain/link.hpp"
-#include "domain/node.hpp"
-#include "domain/pin.hpp"
+#include "domain/core/fractional_number.hpp"
+#include "domain/graph/link.hpp"
+#include "domain/nodes/node.hpp"
+#include "domain/graph/pin.hpp"
 
 // ---------------------------------------------------------------------------
 // Constructs the real graph types (MergerNode, CustomSplitterNode, Pin, Link)

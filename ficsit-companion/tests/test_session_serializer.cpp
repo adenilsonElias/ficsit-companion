@@ -1,10 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "domain/graph_model.hpp"
+#include "domain/graph/graph_model.hpp"
 #include "graph_test_helpers.hpp"
-#include "domain/link.hpp"
-#include "domain/node.hpp"
-#include "infra/session_serializer.hpp"
+#include "domain/graph/link.hpp"
+#include "domain/nodes/node.hpp"
+#include "infra/persistence/session_serializer.hpp"
 
 /// @test   Serializing an empty graph yields non-empty JSON, and deserializing that JSON back leaves
 ///         the graph empty (no spurious nodes/links invented from the envelope).

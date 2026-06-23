@@ -1,0 +1,29 @@
+#pragma once
+
+#include <string>
+
+/// @brief Persisted *view* preferences for the Factory Snapshot tool (the shared
+/// .sav load config lives in SaveSource, not here). A plain data carrier with
+/// JSON (de)serialization, mirroring VehicleMapSession. flow_filter encodes
+/// ResourceFlowFilter (0=All, 1=Deficit, 2=Surplus).
+struct FactorySnapshotSession
+{
+    int flow_filter = 0;
+    std::string flow_search;
+    bool world_layout = false;
+
+    /// @brief Graph-view tuning sliders (Options tab). node_font_scale multiplies
+    /// the snapshot node text size [0.5, 3.0]; icon_scale multiplies the product
+    /// icon size [0.5, 4.0]; collapsed_font_scale multiplies the zoomed-out (collapsed)
+    /// node's input/output number text [0.5, 3.0], independent of node_font_scale.
+    /// All default to 1.0 (no change).
+    float node_font_scale = 1.0f;
+    float icon_scale = 1.0f;
+    float collapsed_font_scale = 1.0f;
+
+    std::string Serialize() const;
+    /// @brief Per-key merge; malformed JSON is ignored; flow_filter out of
+    /// [0,2] is clamped to 0; node_font_scale/icon_scale are clamped to their
+    /// allowed ranges.
+    void Deserialize(const std::string& json);
+};

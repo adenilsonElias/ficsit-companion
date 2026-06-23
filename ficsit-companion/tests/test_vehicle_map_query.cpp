@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "domain/vehicle_map_query.hpp"
+#include "domain/vehicle/vehicle_map_query.hpp"
 
 namespace
 {

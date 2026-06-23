@@ -1,11 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "domain/node.hpp"
-#include "domain/node_data_resolver.hpp"
-#include "domain/recipe.hpp"
-#include "domain/building.hpp"
-#include "domain/json.hpp"
-#include "domain/link.hpp"
+#include "domain/nodes/node.hpp"
+#include "domain/nodes/node_data_resolver.hpp"
+#include "domain/gamedata/recipe.hpp"
+#include "domain/gamedata/building.hpp"
+#include "domain/core/json.hpp"
+#include "domain/graph/link.hpp"
 
 #include "graph_test_helpers.hpp" // IdGen
 

@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "infra/sav_import_service.hpp"
+#include "infra/saveimport/sav_import_service.hpp"
 
 /// @test   A save-file stem is reduced to its bare world name by stripping the standard Satisfactory
 ///         suffixes: a plain name is untouched, while "_CMP", "_autosave_N", and a trailing

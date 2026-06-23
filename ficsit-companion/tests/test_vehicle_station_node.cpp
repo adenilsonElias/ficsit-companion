@@ -1,12 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "domain/node.hpp"
-#include "domain/pin.hpp"
-#include "domain/link.hpp"
-#include "domain/node_data_resolver.hpp"
-#include "domain/json.hpp"
-#include "domain/recipe.hpp" // Item
-#include "domain/vehicle_route.hpp"
+#include "domain/nodes/node.hpp"
+#include "domain/graph/pin.hpp"
+#include "domain/graph/link.hpp"
+#include "domain/nodes/node_data_resolver.hpp"
+#include "domain/core/json.hpp"
+#include "domain/gamedata/recipe.hpp" // Item
+#include "domain/vehicle/vehicle_route.hpp"
 #include "graph_test_helpers.hpp" // IdGen
 
 #include <imgui_node_editor.h>

@@ -1,12 +1,12 @@
 #include "app/vehicle_map_app.hpp"
 
-#include "domain/game_data.hpp"
-#include "domain/json.hpp"
-#include "domain/recipe.hpp" // struct Item
-#include "domain/vehicle_map_query.hpp"
-#include "infra/sav_import_service.hpp"
-#include "infra/sav_runner.hpp"
-#include "infra/vehicle_map_session.hpp"
+#include "domain/gamedata/game_data.hpp"
+#include "domain/core/json.hpp"
+#include "domain/gamedata/recipe.hpp" // struct Item
+#include "domain/vehicle/vehicle_map_query.hpp"
+#include "infra/saveimport/sav_import_service.hpp"
+#include "infra/saveimport/sav_runner.hpp"
+#include "infra/persistence/vehicle_map_session.hpp"
 #include "app/utils.hpp"
 
 #include <imgui.h>

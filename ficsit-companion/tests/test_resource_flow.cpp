@@ -3,13 +3,13 @@
 #include <memory>
 #include <vector>
 
-#include "domain/building.hpp"
-#include "domain/fractional_number.hpp"
-#include "domain/link.hpp"
-#include "domain/node.hpp"
-#include "domain/pin.hpp"
-#include "domain/recipe.hpp"
-#include "domain/resource_flow.hpp"
+#include "domain/gamedata/building.hpp"
+#include "domain/core/fractional_number.hpp"
+#include "domain/graph/link.hpp"
+#include "domain/nodes/node.hpp"
+#include "domain/graph/pin.hpp"
+#include "domain/gamedata/recipe.hpp"
+#include "domain/snapshot/resource_flow.hpp"
 
 #include "graph_test_helpers.hpp" // IdGen
 

@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include "infra/vehicle_map_session.hpp"
-#include "domain/vehicle_map_camera.hpp"
+#include "infra/persistence/vehicle_map_session.hpp"
+#include "domain/vehicle/vehicle_map_camera.hpp"
 
 using Catch::Approx;
 

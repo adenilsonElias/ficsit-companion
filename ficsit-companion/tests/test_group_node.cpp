@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "domain/node.hpp"
-#include "domain/recipe.hpp"
-#include "domain/building.hpp"
+#include "domain/nodes/node.hpp"
+#include "domain/gamedata/recipe.hpp"
+#include "domain/gamedata/building.hpp"
 
 #include "graph_test_helpers.hpp" // IdGen
 

@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include "infra/file_store.hpp"
-#include "infra/settings_store.hpp"
+#include "infra/ports/file_store.hpp"
+#include "infra/persistence/settings_store.hpp"
 
 /// @test   Every scalar setting survives a Save → Load round-trip through the store: bools
 ///         (show_somersloop, power_equal_clocks, left_panel_folded), strings (sav_watch_dir,

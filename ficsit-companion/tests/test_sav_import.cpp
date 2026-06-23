@@ -6,10 +6,10 @@
 #include <filesystem>
 #include <string>
 
-#include "domain/game_data.hpp"
-#include "domain/node.hpp"
-#include "domain/recipe.hpp"
-#include "infra/sav_import.hpp"
+#include "domain/gamedata/game_data.hpp"
+#include "domain/nodes/node.hpp"
+#include "domain/gamedata/recipe.hpp"
+#include "infra/saveimport/sav_import.hpp"
 
 #include "graph_test_helpers.hpp"
 

@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "app/base_app.hpp"
-#include "domain/vehicle_map.hpp"
-#include "domain/vehicle_map_camera.hpp"
+#include "domain/vehicle/vehicle_map.hpp"
+#include "domain/vehicle/vehicle_map_camera.hpp"
 
 /// @brief Second top-level tool: a 2D world map of vehicles, stations and the
 /// routes between them. Fully decoupled from ProductionApp — it shares only the
@@ -63,7 +63,7 @@ private:
     void ClearSelection();
 
     // ---- Filtering / highlight ----
-    // (Pure logic lives in domain/vehicle_map_query.hpp; these bind app state.)
+    // (Pure logic lives in domain/vehicle/vehicle_map_query.hpp; these bind app state.)
     bool StationPassesFilter(const VehicleMap::Station& st) const;
     bool VehiclePassesFilter(const VehicleMap::Vehicle& ve) const;
 

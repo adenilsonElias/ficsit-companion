@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "infra/factory_snapshot_session.hpp"
+#include "infra/persistence/factory_snapshot_session.hpp"
 
 /// @test Every persisted view-pref field survives Serialize -> Deserialize.
 /// @covers FactorySnapshotSession::Serialize/Deserialize full field set.

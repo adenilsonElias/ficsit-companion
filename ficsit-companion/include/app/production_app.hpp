@@ -9,13 +9,13 @@
 #include <imgui_node_editor.h>
 
 #include "app/base_app.hpp"
-#include "infra/editor_backend.hpp"
-#include "infra/file_store.hpp"
-#include "domain/fractional_number.hpp"
-#include "domain/graph_model.hpp"
-#include "domain/resource_flow.hpp"
-#include "infra/session_serializer.hpp"
-#include "infra/settings_store.hpp"
+#include "infra/ports/editor_backend.hpp"
+#include "infra/ports/file_store.hpp"
+#include "domain/core/fractional_number.hpp"
+#include "domain/graph/graph_model.hpp"
+#include "domain/snapshot/resource_flow.hpp"
+#include "infra/persistence/session_serializer.hpp"
+#include "infra/persistence/settings_store.hpp"
 
 struct Link;
 struct Node;

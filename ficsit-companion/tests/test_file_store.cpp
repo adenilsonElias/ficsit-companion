@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "infra/file_store.hpp"
+#include "infra/ports/file_store.hpp"
 
 /// @test   The in-memory file store behaves like a key/value filesystem: a missing key reads as
 ///         empty, a saved key reads back the exact bytes written, and a removed key reads as empty
