@@ -21,6 +21,16 @@ struct FactorySnapshotSession
     float icon_scale = 1.0f;
     float collapsed_font_scale = 1.0f;
 
+    /// @brief Snapshot graph-view "hide & bypass logistics" preferences. Master
+    /// toggle off by default; per-kind selections default on so enabling the
+    /// master immediately hides all four kinds. Visualization-only (model and
+    /// resource-flow report are unaffected).
+    bool hide_logistics_enabled = false;
+    bool hide_game_splitters = true;
+    bool hide_custom_splitters = true;
+    bool hide_mergers = true;
+    bool hide_logistics_nodes = true;
+
     std::string Serialize() const;
     /// @brief Per-key merge; malformed JSON is ignored; flow_filter out of
     /// [0,2] is clamped to 0; node_font_scale/icon_scale are clamped to their

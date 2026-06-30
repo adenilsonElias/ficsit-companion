@@ -32,3 +32,11 @@ SnapshotCategory NodeSnapshotCategory(const Node& node);
 /// to a producer when a resource is clicked. Pure: no UI, no editor context.
 std::vector<const Node*> NodesProducingItem(
     const std::vector<std::unique_ptr<Node>>& nodes, const std::string& item_name);
+
+/// @brief Nodes that CONSUME the named item: Craft or Sink nodes with the item
+/// on an input pin, in node order. Pass-through nodes (mergers/splitters/
+/// storages/logistics) that merely carry it are excluded. Used to jump the
+/// snapshot graph to a consumer when a resource's Consumed value is clicked.
+/// Pure: no UI, no editor context.
+std::vector<const Node*> NodesConsumingItem(
+    const std::vector<std::unique_ptr<Node>>& nodes, const std::string& item_name);

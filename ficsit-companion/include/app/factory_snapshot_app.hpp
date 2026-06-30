@@ -6,6 +6,7 @@
 
 #include "app/base_app.hpp"
 #include "domain/snapshot/factory_snapshot_model.hpp"
+#include "domain/snapshot/snapshot_bypass.hpp"
 #include "domain/nodes/node_display.hpp"
 #include "infra/persistence/factory_snapshot_session.hpp"
 
@@ -56,6 +57,13 @@ private:
     /// @brief Draw the links between node pins (purely visual).
     void RenderSnapshotLinks();
 
+    /// @brief True when `node` should be hidden under the current session
+    /// hide-* toggles (master off => always false).
+    bool IsNodeHidden(const Node& node) const;
+    /// @brief Recompute `visible_edges` from the model under the current hide
+    /// toggles, assigning each edge a stable editor link id from NextId().
+    void RebuildVisibleEdges();
+
     unsigned long long int NextId();
 
     FactorySnapshotModel model;
@@ -69,18 +77,31 @@ private:
     /// apply imported node positions and fit the view.
     bool needs_layout_apply = false;
 
+    /// @brief Cached effective edges to draw (hidden nodes bypassed). Each entry
+    /// pairs a SnapshotEdge with a stable editor link id. Rebuilt on import and
+    /// whenever a hide toggle changes.
+    struct CachedEdge { SnapshotEdge edge; ax::NodeEditor::LinkId id; };
+    std::vector<CachedEdge> visible_edges;
+
     /// @brief Unscaled text line height captured each frame before the node font
     /// scale is applied, so product-icon sizing stays independent of the font
     /// slider. Set in RenderGraphCanvas, read by the node render helpers.
     float node_base_line = 0.0f;
 
-    /// @brief Pending "jump to a producer of this item" request, set when a row in
+    /// @brief Which node set a pending jump request targets: producers of the
+    /// item (Produced number / item name clicked) or consumers (Consumed number).
+    enum class NavMode { Produce, Consume };
+
+    /// @brief Pending "jump to a node for this item" request, set when a cell in
     /// the resource-flow table is clicked and consumed by RenderGraphCanvas (which
     /// runs inside the editor context, where navigation is valid). Empty = none.
     std::string nav_item;
-    /// @brief Cycle bookkeeping so repeated clicks on the same item step through
-    /// all of its producers; resets when a different item is clicked.
+    /// @brief Whether the pending request targets producers or consumers.
+    NavMode nav_mode = NavMode::Produce;
+    /// @brief Cycle bookkeeping so repeated clicks on the same item+mode step
+    /// through all matching nodes; resets when the item OR the mode changes.
     std::string nav_cycle_item;
+    NavMode nav_cycle_mode = NavMode::Produce;
     int nav_cycle_index = 0;
 
     std::string last_error;

@@ -328,11 +328,40 @@ void FactorySnapshotApp::RenderOptionsPanel()
     if (changed) SaveSession();
 
     ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Declutter (visualization only)");
+
+    bool hide_changed = ImGui::Checkbox("Hide splitters / mergers / logistics",
+                                        &session.hide_logistics_enabled);
+
+    ImGui::BeginDisabled(!session.hide_logistics_enabled);
+    ImGui::Indent();
+    hide_changed |= ImGui::Checkbox("Game Splitters", &session.hide_game_splitters);
+    hide_changed |= ImGui::Checkbox("Custom Splitters", &session.hide_custom_splitters);
+    hide_changed |= ImGui::Checkbox("Mergers", &session.hide_mergers);
+    hide_changed |= ImGui::Checkbox("Logistics", &session.hide_logistics_nodes);
+    ImGui::Unindent();
+    ImGui::EndDisabled();
+
+    if (hide_changed)
+    {
+        SaveSession();
+        RebuildVisibleEdges();
+    }
+
+    ImGui::Spacing();
     if (ImGui::Button("Reset to defaults"))
     {
         session.node_font_scale = 1.0f;
         session.icon_scale = 1.0f;
         session.collapsed_font_scale = 1.0f;
+        session.hide_logistics_enabled = false;
+        session.hide_game_splitters = true;
+        session.hide_custom_splitters = true;
+        session.hide_mergers = true;
+        session.hide_logistics_nodes = true;
+        RebuildVisibleEdges();
         SaveSession();
     }
 }
@@ -369,20 +398,42 @@ void FactorySnapshotApp::RenderResourceFlowTable()
         {
             if (!RowPassesFilter(row, flow_filter, session.flow_search)) continue;
             ImGui::TableNextRow();
+            // Cell text (item names, rate strings) repeats across rows, so scope
+            // the Selectable ids by the row's item pointer to keep them unique.
+            ImGui::PushID(static_cast<const void*>(row.item));
+
             ImGui::TableNextColumn();
-            // Click an item to jump the graph to a machine producing it. The
-            // navigation itself runs in RenderGraphCanvas (editor context).
-            const char* item_name = row.item ? row.item->name.c_str() : "(unknown)";
-            if (ImGui::Selectable(item_name, false, ImGuiSelectableFlags_SpanAllColumns) && row.item)
+            // Click a cell to jump the graph to a node for this item; navigation
+            // itself runs in RenderGraphCanvas (editor context). The item name and
+            // the Produced number jump to producers, the Consumed number to
+            // consumers. The "##name"/"##prod"/"##cons" suffixes hide a per-cell id
+            // so identical displayed text (e.g. Produced and Consumed both "0") in
+            // the same row does not collide.
+            const std::string item_name = row.item ? row.item->name : std::string("(unknown)");
+            if (ImGui::Selectable((item_name + "##name").c_str(), false) && row.item)
             {
                 nav_item = row.item->name;
+                nav_mode = NavMode::Produce;
             }
+
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(row.produced.GetStringFloat().c_str());
+            if (ImGui::Selectable((row.produced.GetStringFloat() + "##prod").c_str(), false) && row.item)
+            {
+                nav_item = row.item->name;
+                nav_mode = NavMode::Produce;
+            }
+
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(row.consumed.GetStringFloat().c_str());
+            if (ImGui::Selectable((row.consumed.GetStringFloat() + "##cons").c_str(), false) && row.item)
+            {
+                nav_item = row.item->name;
+                nav_mode = NavMode::Consume;
+            }
+
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(row.net.GetStringFloat().c_str());
+
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }
@@ -398,6 +449,7 @@ void FactorySnapshotApp::RenderGraphCanvas()
         {
             ax::NodeEditor::SetNodePosition(node->id, node->pos);
         }
+        RebuildVisibleEdges();
     }
 
     // Capture the unscaled line height before applying the font scale, so the
@@ -411,6 +463,7 @@ void FactorySnapshotApp::RenderGraphCanvas()
     ImGui::SetWindowFontScale(session.node_font_scale);
     for (const auto& node : model.nodes)
     {
+        if (IsNodeHidden(*node)) continue;
         RenderSnapshotNode(*node);
     }
     ImGui::SetWindowFontScale(1.0f);
@@ -424,22 +477,27 @@ void FactorySnapshotApp::RenderGraphCanvas()
         needs_layout_apply = false;
     }
 
-    // Consume a pending "jump to producer" request from the resource-flow table.
-    // Repeated clicks on the same item cycle through all of its producers.
+    // Consume a pending "jump to a node for this item" request from the
+    // resource-flow table. Repeated clicks on the same item+mode cycle through
+    // all matching nodes (producers for Produce, consumers for Consume).
     if (!nav_item.empty())
     {
-        const std::vector<const Node*> producers = NodesProducingItem(model.nodes, nav_item);
-        if (!producers.empty())
+        const std::vector<const Node*> targets =
+            nav_mode == NavMode::Produce
+                ? NodesProducingItem(model.nodes, nav_item)
+                : NodesConsumingItem(model.nodes, nav_item);
+        if (!targets.empty())
         {
-            if (nav_item != nav_cycle_item)
+            if (nav_item != nav_cycle_item || nav_mode != nav_cycle_mode)
             {
                 nav_cycle_item = nav_item;
+                nav_cycle_mode = nav_mode;
                 nav_cycle_index = 0;
             }
-            const Node* target = producers[nav_cycle_index % producers.size()];
+            const Node* target = targets[nav_cycle_index % targets.size()];
             ax::NodeEditor::SelectNode(target->id);
             ax::NodeEditor::NavigateToSelection();
-            nav_cycle_index = (nav_cycle_index + 1) % static_cast<int>(producers.size());
+            nav_cycle_index = (nav_cycle_index + 1) % static_cast<int>(targets.size());
         }
         nav_item.clear();
     }
@@ -621,11 +679,34 @@ void FactorySnapshotApp::RenderSnapshotNodeCollapsed(const Node& node, SnapshotC
     ImGui::SetWindowFontScale(session.node_font_scale);
 }
 
+bool FactorySnapshotApp::IsNodeHidden(const Node& node) const
+{
+    if (!session.hide_logistics_enabled) return false;
+    switch (node.GetKind())
+    {
+        case Node::Kind::GameSplitter:   return session.hide_game_splitters;
+        case Node::Kind::CustomSplitter: return session.hide_custom_splitters;
+        case Node::Kind::Merger:         return session.hide_mergers;
+        case Node::Kind::Logistics:      return session.hide_logistics_nodes;
+        default:                         return false;
+    }
+}
+
+void FactorySnapshotApp::RebuildVisibleEdges()
+{
+    visible_edges.clear();
+    const std::vector<SnapshotEdge> edges = ComputeVisibleEdges(
+        model.nodes, model.links,
+        [this](const Node& n) { return IsNodeHidden(n); });
+    visible_edges.reserve(edges.size());
+    for (const SnapshotEdge& e : edges)
+        visible_edges.push_back({ e, ax::NodeEditor::LinkId(NextId()) });
+}
+
 void FactorySnapshotApp::RenderSnapshotLinks()
 {
-    for (const auto& link : model.links)
+    for (const CachedEdge& ce : visible_edges)
     {
-        if (!link) continue;
-        ax::NodeEditor::Link(link->id, link->start_id, link->end_id);
+        ax::NodeEditor::Link(ce.id, ce.edge.start_id, ce.edge.end_id);
     }
 }

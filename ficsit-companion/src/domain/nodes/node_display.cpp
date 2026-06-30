@@ -120,3 +120,23 @@ std::vector<const Node*> NodesProducingItem(
     }
     return producers;
 }
+
+std::vector<const Node*> NodesConsumingItem(
+    const std::vector<std::unique_ptr<Node>>& nodes, const std::string& item_name)
+{
+    std::vector<const Node*> consumers;
+    for (const auto& node : nodes)
+    {
+        if (!node) continue;
+        if (!node->IsCraft() && !node->IsSink()) continue;
+        for (const auto& pin : node->ins)
+        {
+            if (pin && pin->item && pin->item->name == item_name)
+            {
+                consumers.push_back(node.get());
+                break;
+            }
+        }
+    }
+    return consumers;
+}

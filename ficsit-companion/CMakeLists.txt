@@ -17,6 +17,7 @@ set(HEADER_FILES
 	include/domain/solver/rate_solver.hpp
 	include/domain/gamedata/recipe.hpp
 	include/domain/snapshot/resource_flow.hpp
+	include/domain/snapshot/snapshot_bypass.hpp
 	include/domain/vehicle/vehicle_map.hpp
 	include/domain/vehicle/vehicle_map_camera.hpp
 	include/domain/vehicle/vehicle_map_query.hpp
@@ -73,6 +74,7 @@ set(DOMAIN_SOURCE_FILES
     src/domain/solver/rate_solver_variables.cpp
     src/domain/gamedata/recipe.cpp
     src/domain/snapshot/resource_flow.cpp
+    src/domain/snapshot/snapshot_bypass.cpp
     src/domain/vehicle/vehicle_map.cpp
     src/domain/vehicle/vehicle_map_camera.cpp
     src/domain/vehicle/vehicle_map_query.cpp
@@ -221,6 +223,7 @@ if (NOT DEFINED EMSCRIPTEN AND TARGET Catch2::Catch2WithMain)
         tests/test_linear_solve.cpp
         tests/test_group_node.cpp
         tests/test_resource_flow.cpp
+        tests/test_snapshot_bypass.cpp
         tests/test_node_display.cpp
         tests/test_rate_solver_phases.cpp
     )
