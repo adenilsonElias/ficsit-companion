@@ -14,9 +14,11 @@ namespace
     // pin reachable through chains of hidden nodes. `visited` guards cycles.
     void CollectVisibleSinks(const Node& hidden_node,
                              const std::function<bool(const Node&)>& is_hidden,
+                             const std::function<bool(const Node&)>& should_bypass,
                              std::unordered_set<const Node*>& visited,
                              std::vector<ax::NodeEditor::PinId>& sinks)
     {
+        if (!should_bypass(hidden_node)) return; // dropped: stop, emit nothing
         if (!visited.insert(&hidden_node).second) return;
         for (const auto& out : hidden_node.outs)
         {
@@ -24,7 +26,7 @@ namespace
             const Pin* end = out->link->end;
             if (!end || !end->node) continue;
             if (is_hidden(*end->node))
-                CollectVisibleSinks(*end->node, is_hidden, visited, sinks);
+                CollectVisibleSinks(*end->node, is_hidden, should_bypass, visited, sinks);
             else
                 sinks.push_back(end->id);
         }
@@ -34,7 +36,8 @@ namespace
 std::vector<SnapshotEdge> ComputeVisibleEdges(
     const std::vector<std::unique_ptr<Node>>& /*nodes*/,
     const std::vector<std::unique_ptr<Link>>& links,
-    const std::function<bool(const Node&)>& is_hidden)
+    const std::function<bool(const Node&)>& is_hidden,
+    const std::function<bool(const Node&)>& should_bypass)
 {
     std::vector<SnapshotEdge> edges;
     std::set<std::pair<uintptr_t, uintptr_t>> seen; // dedupe (start,end) pin ids
@@ -61,7 +64,7 @@ std::vector<SnapshotEdge> ComputeVisibleEdges(
         {
             std::unordered_set<const Node*> visited;
             std::vector<ax::NodeEditor::PinId> sinks;
-            CollectVisibleSinks(*end->node, is_hidden, visited, sinks);
+            CollectVisibleSinks(*end->node, is_hidden, should_bypass, visited, sinks);
             for (const auto& sink : sinks) emit(start->id, sink);
         }
     }

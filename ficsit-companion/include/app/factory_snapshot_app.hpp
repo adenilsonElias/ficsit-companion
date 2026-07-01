@@ -1,5 +1,6 @@
 #pragma once
 
+#include <set>
 #include <string>
 
 #include <imgui_node_editor.h>
@@ -64,6 +65,10 @@ private:
     /// toggles, assigning each edge a stable editor link id from NextId().
     void RebuildVisibleEdges();
 
+    /// @brief Rebuild `hidden_production_set` from session.hidden_production_items.
+    /// Call after loading a session and after any checkbox/select-all change.
+    void RebuildHiddenProductionSet();
+
     unsigned long long int NextId();
 
     FactorySnapshotModel model;
@@ -82,6 +87,10 @@ private:
     /// whenever a hide toggle changes.
     struct CachedEdge { SnapshotEdge edge; ax::NodeEditor::LinkId id; };
     std::vector<CachedEdge> visible_edges;
+
+    /// @brief Fast-lookup mirror of session.hidden_production_items; consulted by
+    /// IsNodeHidden. Rebuilt whenever that list changes.
+    std::set<std::string> hidden_production_set;
 
     /// @brief Unscaled text line height captured each frame before the node font
     /// scale is applied, so product-icon sizing stays independent of the font

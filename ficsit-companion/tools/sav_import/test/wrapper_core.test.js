@@ -409,6 +409,36 @@ test("readPipeNetwork returns empty fluidClass when descriptor is absent", () =>
     assert.deepEqual(readPipeNetwork(net), { id: 9, fluidClass: "" });
 });
 
+test("recipeDisplayName strips Alternate_ and applies renamed-recipe overrides", () => {
+    const { recipeDisplayName } = require("../wrapper_core");
+
+    // Standard recipe: only Recipe_ is stripped, camelCase split.
+    assert.equal(
+        recipeDisplayName("/Game/FactoryGame/Recipes/Recipe_IronPlate.Recipe_IronPlate_C"),
+        "Iron Plate");
+
+    // Existing standard-recipe override still wins (class stem differs from display).
+    assert.equal(recipeDisplayName("Recipe_IngotIron_C"), "Iron Ingot");
+
+    // Descriptive alternate: stripping Alternate_ makes the heuristic match the
+    // game-data display name.
+    assert.equal(
+        recipeDisplayName("/Game/.../Recipe_Alternate_CoatedIronPlate.Recipe_Alternate_CoatedIronPlate_C"),
+        "Coated Iron Plate");
+    assert.equal(
+        recipeDisplayName("/Game/.../Recipe_Alternate_PureIronIngot.Recipe_Alternate_PureIronIngot_C"),
+        "Pure Iron Ingot");
+
+    // Renamed alternate: internal class name (EnrichedCoal) differs from the
+    // display name (Compacted Coal); resolved via an explicit override.
+    assert.equal(
+        recipeDisplayName("/Game/.../Recipe_Alternate_EnrichedCoal.Recipe_Alternate_EnrichedCoal_C"),
+        "Compacted Coal");
+
+    // Empty input stays empty.
+    assert.equal(recipeDisplayName(""), "");
+});
+
 test("normal lift traversal does not bounce back after crossing a floor hole", () => {
     const objectsByPath = new Map();
     const beltPaths = new Set(["LiftA", "LiftB"]);

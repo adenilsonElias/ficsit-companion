@@ -20,6 +20,10 @@ std::string FactorySnapshotSession::Serialize() const
     v["hide_custom_splitters"] = hide_custom_splitters;
     v["hide_mergers"] = hide_mergers;
     v["hide_logistics_nodes"] = hide_logistics_nodes;
+    Json::Array hidden_items;
+    for (const std::string& name : hidden_production_items)
+        hidden_items.push_back(Json::Value(name));
+    v["hidden_production_items"] = hidden_items;
     return v.Dump(2);
 }
 
@@ -41,6 +45,12 @@ void FactorySnapshotSession::Deserialize(const std::string& json)
     if (v.contains("hide_custom_splitters") && v["hide_custom_splitters"].is_bool()) hide_custom_splitters = v["hide_custom_splitters"].get<bool>();
     if (v.contains("hide_mergers") && v["hide_mergers"].is_bool()) hide_mergers = v["hide_mergers"].get<bool>();
     if (v.contains("hide_logistics_nodes") && v["hide_logistics_nodes"].is_bool()) hide_logistics_nodes = v["hide_logistics_nodes"].get<bool>();
+    if (v.contains("hidden_production_items") && v["hidden_production_items"].is_array())
+    {
+        hidden_production_items.clear();
+        for (const auto& e : v["hidden_production_items"].get_array())
+            if (e.is_string()) hidden_production_items.push_back(e.get_string());
+    }
 
     if (flow_filter < 0 || flow_filter > 2) flow_filter = 0;
     node_font_scale = std::clamp(node_font_scale, 0.5f, 3.0f);

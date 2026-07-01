@@ -46,10 +46,20 @@ namespace
         }
         void Hide(const Node* n) { hidden.insert(n); }
 
+        std::unordered_set<const Node*> dropped; // hidden AND not bypassed
+        void Drop(const Node* n) { hidden.insert(n); dropped.insert(n); }
+
         std::vector<SnapshotEdge> Run()
         {
             return ComputeVisibleEdges(nodes, links,
                 [this](const Node& n) { return hidden.count(&n) != 0; });
+        }
+
+        std::vector<SnapshotEdge> RunWithDrop()
+        {
+            return ComputeVisibleEdges(nodes, links,
+                [this](const Node& n) { return hidden.count(&n) != 0; },
+                [this](const Node& n) { return dropped.count(&n) == 0; }); // bypass unless dropped
         }
         static bool Has(const std::vector<SnapshotEdge>& es,
                         const Pin* start, const Pin* end)
@@ -166,4 +176,49 @@ TEST_CASE("no hidden nodes leaves links untouched", "[snapshot_bypass]")
     auto edges = fx.Run(); // hidden set empty
     REQUIRE(edges.size() == 1);
     REQUIRE(BypassFixture::Has(edges, p->outs[0].get(), c->ins[0].get()));
+}
+
+/// @test A dropped node emits no edges: both its inbound and outbound links vanish.
+TEST_CASE("dropped node removes its links entirely", "[snapshot_bypass]")
+{
+    BypassFixture fx;
+    CustomSplitterNode* p = fx.AddSplitter();
+    MergerNode* d = fx.AddMerger(); fx.Drop(d);     // dropped, not bypassed
+    CustomSplitterNode* c = fx.AddSplitter();
+    fx.Connect(p->outs[0].get(), d->ins[0].get());  // p -> d
+    fx.Connect(d->outs[0].get(), c->ins[0].get());  // d -> c
+
+    auto edges = fx.RunWithDrop();
+    REQUIRE(edges.empty()); // no p->c edge; the dropped node's links disappear
+}
+
+/// @test A bypassed node still reroutes when another node is merely dropped.
+TEST_CASE("drop predicate leaves bypass nodes rerouting", "[snapshot_bypass]")
+{
+    BypassFixture fx;
+    CustomSplitterNode* p = fx.AddSplitter();
+    CustomSplitterNode* b = fx.AddSplitter(); fx.Hide(b);   // bypassed (hidden, not dropped)
+    MergerNode* c = fx.AddMerger();
+    fx.Connect(p->outs[0].get(), b->ins[0].get());
+    fx.Connect(b->outs[0].get(), c->ins[0].get());
+
+    auto edges = fx.RunWithDrop();
+    REQUIRE(edges.size() == 1);
+    REQUIRE(BypassFixture::Has(edges, p->outs[0].get(), c->ins[0].get()));
+}
+
+/// @test A chain visible -> bypass -> drop -> consumer terminates at the drop.
+TEST_CASE("bypass chain terminates at a dropped node", "[snapshot_bypass]")
+{
+    BypassFixture fx;
+    CustomSplitterNode* p = fx.AddSplitter();
+    CustomSplitterNode* b = fx.AddSplitter(); fx.Hide(b);   // bypassed
+    MergerNode* d = fx.AddMerger(); fx.Drop(d);             // dropped
+    CustomSplitterNode* c = fx.AddSplitter();
+    fx.Connect(p->outs[0].get(), b->ins[0].get());
+    fx.Connect(b->outs[0].get(), d->ins[0].get());
+    fx.Connect(d->outs[0].get(), c->ins[0].get());
+
+    auto edges = fx.RunWithDrop();
+    REQUIRE(edges.empty()); // walk reaches d, which is dropped => no edge to c
 }

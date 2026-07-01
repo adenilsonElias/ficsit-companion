@@ -26,7 +26,13 @@ struct SnapshotEdge
 /// a hidden node are skipped (they are reached via the forward walk instead).
 /// Hidden nodes with no visible downstream produce no edge. Duplicate edges
 /// (same start+end) are collapsed. The model is not modified.
+///
+/// When a hidden node's `should_bypass` is false, it is *dropped*: the forward
+/// walk emits nothing and stops at it, so the node and its links disappear
+/// instead of being rerouted. `should_bypass` defaults to "always bypass",
+/// preserving the reroute behavior for callers that pass only `is_hidden`.
 std::vector<SnapshotEdge> ComputeVisibleEdges(
     const std::vector<std::unique_ptr<Node>>& nodes,
     const std::vector<std::unique_ptr<Link>>& links,
-    const std::function<bool(const Node&)>& is_hidden);
+    const std::function<bool(const Node&)>& is_hidden,
+    const std::function<bool(const Node&)>& should_bypass = [](const Node&) { return true; });

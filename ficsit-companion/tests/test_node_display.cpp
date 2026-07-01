@@ -1,10 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <memory>
+#include <set>
 #include <vector>
 
 #include "domain/nodes/node.hpp"
 #include "domain/nodes/node_display.hpp"
+#include "domain/graph/pin.hpp"
 #include "domain/gamedata/recipe.hpp" // Item
 
 namespace
@@ -109,6 +111,44 @@ TEST_CASE("NodesConsumingItem returns only consumers of the item", "[node_displa
     REQUIRE(consumers[0] == expected_consumer);
 
     REQUIRE(NodesConsumingItem(nodes, "Copper Ore").empty());
+}
+
+/// @test NodeProductionHidden hides a single-output producer when its item is
+/// in the hidden set, keeps it otherwise, and never hides non-producers.
+/// @covers NodeProductionHidden producer/non-producer + hidden-set membership.
+TEST_CASE("NodeProductionHidden hides producers whose every output is hidden", "[node_display]")
+{
+    const Item iron_ore("Iron Ore", "", 0);
+
+    // Single-output producer (a miner).
+    ExtractorNode miner(60, ExtractorNode::Kind::MinerMk1, &iron_ore, ExtractorNode::Purity::Normal, Gen);
+
+    REQUIRE(NodeProductionHidden(miner, { "Iron Ore" }) == true);
+    REQUIRE(NodeProductionHidden(miner, { "Copper Ore" }) == false);
+    REQUIRE(NodeProductionHidden(miner, {}) == false);
+
+    // A non-producer (merger) is never hidden by this predicate, even if it
+    // carries the item.
+    MergerNode merger(61, Gen, &iron_ore);
+    REQUIRE(NodeProductionHidden(merger, { "Iron Ore" }) == false);
+}
+
+/// @test A multi-output producer stays visible while any one output item is
+/// still visible, and hides only once all of its outputs are hidden.
+/// @covers NodeProductionHidden "all outputs hidden" rule.
+TEST_CASE("NodeProductionHidden keeps multi-output producers with a visible output", "[node_display]")
+{
+    const Item iron_ingot("Iron Ingot", "", 0);
+    const Item slag("Slag", "", 0);
+
+    // Build a producer with two distinct output items: a miner (1 output) plus a
+    // second manually-added output pin. ExtractorNode IsExtractor() => producer.
+    ExtractorNode producer(70, ExtractorNode::Kind::MinerMk1, &iron_ingot, ExtractorNode::Purity::Normal, Gen);
+    producer.outs.push_back(std::make_unique<Pin>(
+        ax::NodeEditor::PinId(Gen()), ax::NodeEditor::PinKind::Output, &producer, &slag));
+
+    REQUIRE(NodeProductionHidden(producer, { "Iron Ingot" }) == false);          // Slag still visible
+    REQUIRE(NodeProductionHidden(producer, { "Iron Ingot", "Slag" }) == true);   // all hidden
 }
 
 /// @test NodeSnapshotCategory maps each node kind (and logistics sub-kind) to its

@@ -7,6 +7,7 @@
 #include <cfloat>
 #include <cstdint>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 #if !defined(__EMSCRIPTEN__)
@@ -177,11 +178,14 @@ void FactorySnapshotApp::LoadSession()
 {
 #if !defined(__EMSCRIPTEN__)
     std::ifstream f(kSessionFile, std::ios::binary);
-    if (!f) return;
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    session.Deserialize(ss.str());
+    if (f)
+    {
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        session.Deserialize(ss.str());
+    }
 #endif
+    RebuildHiddenProductionSet();
 }
 
 void FactorySnapshotApp::SaveSession()
@@ -381,13 +385,35 @@ void FactorySnapshotApp::RenderResourceFlowTable()
         SaveSession();
     }
 
+    if (ImGui::SmallButton("Select all##prod"))
+    {
+        session.hidden_production_items.clear();
+        RebuildHiddenProductionSet();
+        RebuildVisibleEdges();
+        SaveSession();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Unselect all##prod"))
+    {
+        // Hide every producible item currently in the report.
+        std::set<std::string> all;
+        for (ResourceFlowRow& r : model.flow.rows)
+            if (r.item && r.produced != FractionalNumber(0, 1))
+                all.insert(r.item->name);
+        session.hidden_production_items.assign(all.begin(), all.end());
+        RebuildHiddenProductionSet();
+        RebuildVisibleEdges();
+        SaveSession();
+    }
+
     const ResourceFlowFilter flow_filter = static_cast<ResourceFlowFilter>(session.flow_filter);
 
     // Fill the rest of the tab so the table uses the whole left panel.
-    if (ImGui::BeginTable("##flow_table", 4,
+    if (ImGui::BeginTable("##flow_table", 5,
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX,
         ImVec2(0.0f, ImGui::GetContentRegionAvail().y)))
     {
+        ImGui::TableSetupColumn("Show", ImGuiTableColumnFlags_WidthFixed, 36.0f);
         ImGui::TableSetupColumn("Item");
         ImGui::TableSetupColumn("Produced");
         ImGui::TableSetupColumn("Consumed");
@@ -401,6 +427,30 @@ void FactorySnapshotApp::RenderResourceFlowTable()
             // Cell text (item names, rate strings) repeats across rows, so scope
             // the Selectable ids by the row's item pointer to keep them unique.
             ImGui::PushID(static_cast<const void*>(row.item));
+
+            ImGui::TableNextColumn();
+            // Per-item visibility checkbox. Only produced items have producers to
+            // hide; consumed-only rows leave the cell empty. Checked == visible
+            // (item NOT in the hidden set).
+            if (row.item && row.produced != FractionalNumber(0, 1))
+            {
+                bool visible = hidden_production_set.find(row.item->name) == hidden_production_set.end();
+                if (ImGui::Checkbox("##show", &visible))
+                {
+                    if (visible)
+                    {
+                        auto& v = session.hidden_production_items;
+                        v.erase(std::remove(v.begin(), v.end(), row.item->name), v.end());
+                    }
+                    else
+                    {
+                        session.hidden_production_items.push_back(row.item->name);
+                    }
+                    RebuildHiddenProductionSet();
+                    RebuildVisibleEdges();
+                    SaveSession();
+                }
+            }
 
             ImGui::TableNextColumn();
             // Click a cell to jump the graph to a node for this item; navigation
@@ -679,8 +729,16 @@ void FactorySnapshotApp::RenderSnapshotNodeCollapsed(const Node& node, SnapshotC
     ImGui::SetWindowFontScale(session.node_font_scale);
 }
 
+void FactorySnapshotApp::RebuildHiddenProductionSet()
+{
+    hidden_production_set.clear();
+    hidden_production_set.insert(session.hidden_production_items.begin(),
+                                session.hidden_production_items.end());
+}
+
 bool FactorySnapshotApp::IsNodeHidden(const Node& node) const
 {
+    if (NodeProductionHidden(node, hidden_production_set)) return true;
     if (!session.hide_logistics_enabled) return false;
     switch (node.GetKind())
     {
@@ -694,10 +752,16 @@ bool FactorySnapshotApp::IsNodeHidden(const Node& node) const
 
 void FactorySnapshotApp::RebuildVisibleEdges()
 {
+    // Logistics-hidden nodes reroute (bypass); production-hidden nodes are
+    // dropped (their links vanish). should_bypass = "not a production hide".
+    auto should_bypass = [this](const Node& n) {
+        return !NodeProductionHidden(n, hidden_production_set);
+    };
     visible_edges.clear();
     const std::vector<SnapshotEdge> edges = ComputeVisibleEdges(
         model.nodes, model.links,
-        [this](const Node& n) { return IsNodeHidden(n); });
+        [this](const Node& n) { return IsNodeHidden(n); },
+        should_bypass);
     visible_edges.reserve(edges.size());
     for (const SnapshotEdge& e : edges)
         visible_edges.push_back({ e, ax::NodeEditor::LinkId(NextId()) });

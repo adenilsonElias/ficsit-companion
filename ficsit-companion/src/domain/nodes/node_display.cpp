@@ -140,3 +140,17 @@ std::vector<const Node*> NodesConsumingItem(
     }
     return consumers;
 }
+
+bool NodeProductionHidden(const Node& node, const std::set<std::string>& hidden_items)
+{
+    if (!node.IsCraft() && !node.IsExtractor()) return false;
+    bool has_output_item = false;
+    for (const auto& pin : node.outs)
+    {
+        if (!pin || !pin->item) continue;
+        has_output_item = true;
+        if (hidden_items.find(pin->item->name) == hidden_items.end())
+            return false; // an output item is still visible => keep the node
+    }
+    return has_output_item; // producer with at least one item, all hidden
+}

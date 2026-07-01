@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 /// @brief Persisted *view* preferences for the Factory Snapshot tool (the shared
 /// .sav load config lives in SaveSource, not here). A plain data carrier with
@@ -30,6 +31,12 @@ struct FactorySnapshotSession
     bool hide_custom_splitters = true;
     bool hide_mergers = true;
     bool hide_logistics_nodes = true;
+
+    /// @brief Item names whose producers (Craft/Extractor) are hidden on the
+    /// snapshot canvas. Empty by default => every production visible. Storing the
+    /// *hidden* set (not the visible one) keeps the default empty and makes newly
+    /// imported items visible automatically. Visualization-only.
+    std::vector<std::string> hidden_production_items;
 
     std::string Serialize() const;
     /// @brief Per-key merge; malformed JSON is ignored; flow_filter out of

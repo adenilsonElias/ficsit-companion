@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -40,3 +41,9 @@ std::vector<const Node*> NodesProducingItem(
 /// Pure: no UI, no editor context.
 std::vector<const Node*> NodesConsumingItem(
     const std::vector<std::unique_ptr<Node>>& nodes, const std::string& item_name);
+
+/// @brief True when `node` is a producer (Craft or Extractor) that has at least
+/// one output item AND every one of its output items is present in `hidden_items`.
+/// Non-producers, and producers with any still-visible output item, return false.
+/// Used to pure-hide a production from the read-only snapshot canvas. Pure: no UI.
+bool NodeProductionHidden(const Node& node, const std::set<std::string>& hidden_items);

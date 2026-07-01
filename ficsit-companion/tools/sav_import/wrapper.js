@@ -23,6 +23,8 @@ const path = require("path");
 const BeltCore = require("./wrapper_core");
 const {
     stripClassWrap,
+    splitCamel,
+    recipeDisplayName,
     firstInventoryItem,
     classifyGeneratorClass,
     generatorRecipeForFuel,
@@ -77,46 +79,8 @@ try {
 // class name. Known exceptions are listed in DISPLAY_OVERRIDES.
 // ---------------------------------------------------------------------------
 
-const DISPLAY_OVERRIDES = {
-    // Recipe class -> display name overrides for cases where the
-    // splitCamel/strip heuristic does not match assets/satisfactory.json.
-    // Keys are the class with "_C" already stripped (matches recipeDisplayName
-    // after stripClassWrap). Extend as new mismatches surface.
-    "Recipe_IngotIron": "Iron Ingot",
-    "Recipe_IngotCopper": "Copper Ingot",
-    "Recipe_IngotCaterium": "Caterium Ingot",
-    "Recipe_IngotSteel": "Steel Ingot",
-    "Recipe_IngotSAM": "Reanimated SAM",
-    "Recipe_PureIronIngot": "Pure Iron Ingot",
-    "Recipe_PureCopperIngot": "Pure Copper Ingot",
-    "Recipe_IronPlateReinforced": "Reinforced Iron Plate",
-    "Recipe_ModularFrameHeavy": "Heavy Modular Frame",
-    "Recipe_Biofuel": "Solid Biofuel",
-    "Recipe_Gunpowder": "Black Powder",
-    "Recipe_GunpowderMK2": "Smokeless Powder",
-};
-
-function splitCamel(s) {
-    // Insert spaces before capital letters that follow a lowercase letter or
-    // a digit; keep all-caps groups together (e.g. "AILimiter" -> "AI Limiter").
-    return s
-        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-        .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-        .replace(/_+/g, " ")
-        .trim();
-}
-
-// stripClassWrap is shared from wrapper_core (single source of truth for the
-// class-path/_C suffix rule).
-
-function recipeDisplayName(recipeClass) {
-    if (!recipeClass) return "";
-    const s = stripClassWrap(recipeClass);
-    if (DISPLAY_OVERRIDES[s]) return DISPLAY_OVERRIDES[s];
-    let body = s;
-    if (body.startsWith("Recipe_")) body = body.substring("Recipe_".length);
-    return splitCamel(body);
-}
+// splitCamel and recipeDisplayName are shared from wrapper_core (single source
+// of truth for the class-path/_C suffix rule and recipe-name heuristic).
 
 function itemDisplayName(itemClass) {
     if (!itemClass) return "";

@@ -220,6 +220,58 @@ function stripClassWrap(cls) {
     return s;
 }
 
+// Recipe class (with "_C" already stripped) -> display name overrides, for cases
+// where the splitCamel/strip heuristic does not match assets/satisfactory.json.
+// Keys are the class as returned by stripClassWrap. Two families live here:
+//  - standard recipes whose class stem differs from the display name;
+//  - *renamed alternates*, whose internal class token differs from the display
+//    name even after the "Alternate_" prefix is stripped (e.g. EnrichedCoal is
+//    the in-game class for "Compacted Coal"). Numeric-variant alternates
+//    (Recipe_Alternate_<Thing>_<N>) are intentionally NOT guessed here: an
+//    unknown index would risk mapping a machine to the wrong recipe, so they are
+//    left to surface as "unmapped recipe" import warnings and added explicitly
+//    once verified against the data.
+const DISPLAY_OVERRIDES = {
+    "Recipe_IngotIron": "Iron Ingot",
+    "Recipe_IngotCopper": "Copper Ingot",
+    "Recipe_IngotCaterium": "Caterium Ingot",
+    "Recipe_IngotSteel": "Steel Ingot",
+    "Recipe_IngotSAM": "Reanimated SAM",
+    "Recipe_PureIronIngot": "Pure Iron Ingot",
+    "Recipe_PureCopperIngot": "Pure Copper Ingot",
+    "Recipe_IronPlateReinforced": "Reinforced Iron Plate",
+    "Recipe_ModularFrameHeavy": "Heavy Modular Frame",
+    "Recipe_Biofuel": "Solid Biofuel",
+    "Recipe_Gunpowder": "Black Powder",
+    "Recipe_GunpowderMK2": "Smokeless Powder",
+    // Renamed alternates (class token != display name):
+    "Recipe_Alternate_EnrichedCoal": "Compacted Coal",
+};
+
+function splitCamel(s) {
+    // Insert spaces before capital letters that follow a lowercase letter or
+    // a digit; keep all-caps groups together (e.g. "AILimiter" -> "AI Limiter").
+    return s
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+        .replace(/_+/g, " ")
+        .trim();
+}
+
+function recipeDisplayName(recipeClass) {
+    if (!recipeClass) return "";
+    const s = stripClassWrap(recipeClass);
+    if (DISPLAY_OVERRIDES[s]) return DISPLAY_OVERRIDES[s];
+    let body = s;
+    if (body.startsWith("Recipe_")) body = body.substring("Recipe_".length);
+    // Alternate recipes are classed Recipe_Alternate_<Name>; their display name
+    // in assets/satisfactory.json carries no "Alternate" prefix, so drop it
+    // before the camelCase split. Renamed alternates are caught by the override
+    // table above (checked first).
+    if (body.startsWith("Alternate_")) body = body.substring("Alternate_".length);
+    return splitCamel(body);
+}
+
 function classifyGeneratorClass(buildingClass) {
     const s = stripClassWrap(buildingClass);
     // Geothermal generators burn no item fuel, so there is no Power (...) recipe
@@ -393,6 +445,8 @@ module.exports = {
     followBeltChain,
     getComponentPort,
     stripClassWrap,
+    splitCamel,
+    recipeDisplayName,
     firstInventoryItem,
     classifyGeneratorClass,
     generatorRecipeForFuel,

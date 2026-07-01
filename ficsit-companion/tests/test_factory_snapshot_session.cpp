@@ -1,5 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+#include <vector>
+
 #include "infra/persistence/factory_snapshot_session.hpp"
 
 /// @test Every persisted view-pref field survives Serialize -> Deserialize.
@@ -75,4 +78,32 @@ TEST_CASE("FactorySnapshotSession keeps hide defaults when keys absent", "[snaps
     REQUIRE(s.hide_custom_splitters == true);
     REQUIRE(s.hide_mergers == true);
     REQUIRE(s.hide_logistics_nodes == true);
+}
+
+/// @test hidden_production_items survives Serialize -> Deserialize.
+TEST_CASE("FactorySnapshotSession round-trips hidden_production_items", "[snapshot_session]")
+{
+    FactorySnapshotSession in;
+    in.hidden_production_items = { "Iron Ingot", "Screw" };
+
+    FactorySnapshotSession out;
+    out.Deserialize(in.Serialize());
+
+    REQUIRE(out.hidden_production_items == in.hidden_production_items);
+}
+
+/// @test A session JSON without the key leaves hidden_production_items empty.
+TEST_CASE("FactorySnapshotSession defaults hidden_production_items to empty", "[snapshot_session]")
+{
+    FactorySnapshotSession s;
+    s.Deserialize("{\"flow_filter\": 1}");
+    REQUIRE(s.hidden_production_items.empty());
+}
+
+/// @test Non-string array entries are skipped on deserialize.
+TEST_CASE("FactorySnapshotSession ignores non-string hidden items", "[snapshot_session]")
+{
+    FactorySnapshotSession s;
+    s.Deserialize("{\"hidden_production_items\": [\"Iron Ingot\", 7, true]}");
+    REQUIRE(s.hidden_production_items == std::vector<std::string>{ "Iron Ingot" });
 }
