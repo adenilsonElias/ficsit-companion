@@ -75,6 +75,7 @@ set(DOMAIN_SOURCE_FILES
     src/domain/gamedata/recipe.cpp
     src/domain/snapshot/resource_flow.cpp
     src/domain/snapshot/snapshot_bypass.cpp
+    src/domain/snapshot/rate_propagation.cpp
     src/domain/vehicle/vehicle_map.cpp
     src/domain/vehicle/vehicle_map_camera.cpp
     src/domain/vehicle/vehicle_map_query.cpp
@@ -224,6 +225,7 @@ if (NOT DEFINED EMSCRIPTEN AND TARGET Catch2::Catch2WithMain)
         tests/test_group_node.cpp
         tests/test_resource_flow.cpp
         tests/test_snapshot_bypass.cpp
+        tests/test_rate_propagation.cpp
         tests/test_node_display.cpp
         tests/test_rate_solver_phases.cpp
     )

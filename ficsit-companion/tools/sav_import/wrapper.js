@@ -31,6 +31,7 @@ const {
     resolveGeneratorFuelItem,
     pipeConnectorInfo,
     readPipeNetwork,
+    readProductivity,
 } = BeltCore;
 
 function die(msg) {
@@ -571,6 +572,9 @@ for (const a of actors) {
         item_name: itemDisplayName(itemRef),
         clock: Number(clock) || 1.0,
         somersloops: Number(somersloops) || 0,
+        // Measured productivity in [0,1] from the save (1.0 when unavailable).
+        // The C++ side folds this into machine rates when "Apply efficiency" is on.
+        efficiency: readProductivity(props),
         pos: readPos(a),
         inputs: [],
         outputs: [],

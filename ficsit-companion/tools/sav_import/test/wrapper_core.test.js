@@ -4,7 +4,13 @@ const assert = require("node:assert/strict");
 const {
     buildFloorHolePeerMap,
     followBeltChain,
+    readProductivity,
 } = require("../wrapper_core");
+
+// Build a FloatProperty in the array-of-properties shape the parser emits.
+function floatProp(name, value) {
+    return { type: "FloatProperty", name, value };
+}
 
 function ref(pathName) {
     return { value: { pathName } };
@@ -479,4 +485,46 @@ test("normal lift traversal does not bounce back after crossing a floor hole", (
         compPath: "Consumer.Input1",
         parentEntityPath: "Consumer",
     });
+});
+
+test("readProductivity uses the last completed measurement window", () => {
+    const props = [
+        floatProp("mLastProductivityMeasurementProduceDuration", 150),
+        floatProp("mLastProductivityMeasurementDuration", 300),
+    ];
+    assert.equal(readProductivity(props), 0.5);
+});
+
+test("readProductivity clamps produce>total to 1.0 and negatives to 0", () => {
+    assert.equal(readProductivity([
+        floatProp("mLastProductivityMeasurementProduceDuration", 400),
+        floatProp("mLastProductivityMeasurementDuration", 300),
+    ]), 1.0);
+    assert.equal(readProductivity([
+        floatProp("mLastProductivityMeasurementProduceDuration", -5),
+        floatProp("mLastProductivityMeasurementDuration", 300),
+    ]), 0);
+});
+
+test("readProductivity falls back to the current window when last is absent", () => {
+    const props = [
+        floatProp("mCurrentProductivityMeasurementProduceDuration", 75),
+        floatProp("mCurrentProductivityMeasurementDuration", 300),
+    ];
+    assert.equal(readProductivity(props), 0.25);
+});
+
+test("readProductivity defaults to 1.0 when no measurement is present", () => {
+    assert.equal(readProductivity([]), 1.0);
+    assert.equal(readProductivity([
+        floatProp("mLastProductivityMeasurementDuration", 0),
+    ]), 1.0);
+});
+
+test("readProductivity also accepts an object-map property shape", () => {
+    const props = {
+        mLastProductivityMeasurementProduceDuration: 60,
+        mLastProductivityMeasurementDuration: 300,
+    };
+    assert.equal(readProductivity(props), 0.2);
 });

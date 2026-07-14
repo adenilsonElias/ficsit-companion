@@ -20,10 +20,14 @@ TEST_CASE("FactorySnapshotSession round-trips every field", "[snapshot_session]"
     in.hide_custom_splitters = true;
     in.hide_mergers = false;
     in.hide_logistics_nodes = true;
+    in.apply_efficiency = false;   // flip from its default (true)
+    in.show_throughput = true;     // flip from its default (false)
 
     FactorySnapshotSession out;
     out.Deserialize(in.Serialize());
 
+    REQUIRE(out.apply_efficiency == in.apply_efficiency);
+    REQUIRE(out.show_throughput == in.show_throughput);
     REQUIRE(out.flow_filter == in.flow_filter);
     REQUIRE(out.flow_search == in.flow_search);
     REQUIRE(out.world_layout == in.world_layout);
@@ -78,6 +82,16 @@ TEST_CASE("FactorySnapshotSession keeps hide defaults when keys absent", "[snaps
     REQUIRE(s.hide_custom_splitters == true);
     REQUIRE(s.hide_mergers == true);
     REQUIRE(s.hide_logistics_nodes == true);
+}
+
+/// @test A session JSON without the efficiency/throughput keys keeps their
+///        defaults (apply_efficiency ON, show_throughput OFF).
+TEST_CASE("FactorySnapshotSession keeps efficiency/throughput defaults when keys absent", "[snapshot_session]")
+{
+    FactorySnapshotSession s;
+    s.Deserialize("{\"flow_filter\": 1}");
+    REQUIRE(s.apply_efficiency == true);
+    REQUIRE(s.show_throughput == false);
 }
 
 /// @test hidden_production_items survives Serialize -> Deserialize.

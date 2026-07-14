@@ -42,8 +42,18 @@ std::vector<const Node*> NodesProducingItem(
 std::vector<const Node*> NodesConsumingItem(
     const std::vector<std::unique_ptr<Node>>& nodes, const std::string& item_name);
 
-/// @brief True when `node` is a producer (Craft or Extractor) that has at least
-/// one output item AND every one of its output items is present in `hidden_items`.
-/// Non-producers, and producers with any still-visible output item, return false.
-/// Used to pure-hide a production from the read-only snapshot canvas. Pure: no UI.
+/// @brief True when `node` is a producer (Craft or Extractor) that touches at
+/// least one item AND every item on ALL its pins — consumed inputs and produced
+/// outputs alike — is present in `hidden_items`. A machine that still consumes or
+/// produces any visible item stays visible, so "show only Cable" keeps the
+/// machine that consumes Cable to make a hidden product. Non-producers return
+/// false. Used to pure-hide a production from the read-only snapshot canvas. Pure.
 bool NodeProductionHidden(const Node& node, const std::set<std::string>& hidden_items);
+
+/// @brief True when `node` is a pass-through logistics/flow node (splitter,
+/// merger, or logistics station/storage) that carries at least one item AND every
+/// item on its pins is present in `hidden_items`. Producers, sinks, and logistics
+/// nodes with any still-visible pin item (or no resolved item) return false.
+/// Lets hiding an item also hide the splitters/mergers/stations/storages that
+/// carry only that item; such nodes reroute (bypass) rather than drop. Pure: no UI.
+bool NodeLogisticsHiddenByItems(const Node& node, const std::set<std::string>& hidden_items);

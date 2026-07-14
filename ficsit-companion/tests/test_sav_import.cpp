@@ -8,6 +8,7 @@
 
 #include "domain/gamedata/game_data.hpp"
 #include "domain/nodes/node.hpp"
+#include "domain/graph/pin.hpp"
 #include "domain/gamedata/recipe.hpp"
 #include "infra/saveimport/sav_import.hpp"
 
@@ -206,6 +207,76 @@ TEST_CASE("BuildGraph warns when a merger receives different item streams", "[sa
     REQUIRE(out.nodes.size() == 3);
     REQUIRE(out.nodes[2]->IsMerger());
     REQUIRE(static_cast<MergerNode*>(out.nodes[2].get())->item == nullptr);
+}
+
+/// @test   A producer's rates are scaled by its measured save efficiency only
+///         when BuildOptions::apply_efficiency is set: off => nominal clock
+///         rate (efficiency ignored); on => rate multiplied by efficiency.
+/// @covers SavImport::BuildGraph efficiency-aware producer seeding.
+TEST_CASE("BuildGraph scales producer rates by efficiency only when apply_efficiency is set", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    auto build_output_rate = [](bool apply, double eff) {
+        SavImport::ParseResult parsed;
+        parsed.ok = true;
+        SavImport::Building m = Manufacturer("smelter", "Iron Ingot", 0.0f);
+        m.efficiency = eff;
+        parsed.buildings.push_back(m);
+
+        IdGen ids;
+        SavImport::BuildOutput out;
+        std::string err;
+        SavImport::BuildOptions opts;
+        opts.apply_efficiency = apply;
+        REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err, opts));
+        REQUIRE(out.nodes.size() == 1);
+        REQUIRE(out.nodes[0]->IsCraft());
+        REQUIRE_FALSE(out.nodes[0]->outs.empty());
+        return out.nodes[0]->outs[0]->current_rate;
+    };
+
+    const FractionalNumber nominal = build_output_rate(true, 1.0);   // full, applied
+    REQUIRE(build_output_rate(false, 0.5) == nominal);               // off: 0.5 ignored
+    REQUIRE(build_output_rate(true, 0.5) == nominal * FractionalNumber(1, 2)); // on: halved
+    REQUIRE(build_output_rate(true, 0.0) == FractionalNumber(0, 1)); // on: idle => zero
+}
+
+/// @test   Efficiency propagates DOWNSTREAM through the wired graph, not just
+///         onto the producer pin: a manufacturer at 50% feeding a merger makes
+///         the merger's output rate half of its nominal value. Proves the
+///         efficiency-scaled seed flows through PropagateRates end-to-end.
+/// @covers SavImport::BuildGraph efficiency seeding + rate propagation.
+TEST_CASE("BuildGraph propagates efficiency-scaled rates downstream", "[sav_import]")
+{
+    EnsureGameDataLoaded();
+
+    auto merger_out_rate = [](bool apply, double eff) {
+        SavImport::ParseResult parsed;
+        parsed.ok = true;
+        SavImport::Building m = Manufacturer("smelter", "Iron Ingot", 0.0f);
+        m.efficiency = eff;
+        parsed.buildings.push_back(m);
+        parsed.buildings.push_back(Merger("merger", 100.0f));
+        parsed.belts.push_back(Belt("smelter_to_merger", "smelter", 0, "merger", 0));
+
+        IdGen ids;
+        SavImport::BuildOutput out;
+        std::string err;
+        SavImport::BuildOptions opts;
+        opts.apply_efficiency = apply;
+        REQUIRE(SavImport::BuildGraph(parsed, std::ref(ids), out, err, opts));
+
+        const Node* merger = nullptr;
+        for (const auto& n : out.nodes) if (n->IsMerger()) merger = n.get();
+        REQUIRE(merger != nullptr);
+        REQUIRE_FALSE(merger->outs.empty());
+        return merger->outs[0]->current_rate;
+    };
+
+    const FractionalNumber nominal = merger_out_rate(false, 0.5); // efficiency off
+    REQUIRE(nominal > FractionalNumber(0, 1));
+    REQUIRE(merger_out_rate(true, 0.5) == nominal * FractionalNumber(1, 2));
 }
 
 /// @test   Mixed-item detection does not use downstream multi-input craft pins

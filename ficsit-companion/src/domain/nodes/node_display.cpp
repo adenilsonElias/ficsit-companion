@@ -144,13 +144,50 @@ std::vector<const Node*> NodesConsumingItem(
 bool NodeProductionHidden(const Node& node, const std::set<std::string>& hidden_items)
 {
     if (!node.IsCraft() && !node.IsExtractor()) return false;
-    bool has_output_item = false;
+    bool has_item = false;
+    for (const auto& pin : node.ins)
+    {
+        if (!pin || !pin->item) continue;
+        has_item = true;
+        if (hidden_items.find(pin->item->name) == hidden_items.end())
+            return false; // a consumed item is still visible => keep the node
+    }
     for (const auto& pin : node.outs)
     {
         if (!pin || !pin->item) continue;
-        has_output_item = true;
+        has_item = true;
         if (hidden_items.find(pin->item->name) == hidden_items.end())
-            return false; // an output item is still visible => keep the node
+            return false; // a produced item is still visible => keep the node
     }
-    return has_output_item; // producer with at least one item, all hidden
+    return has_item; // producer with at least one item, every input+output hidden
+}
+
+bool NodeLogisticsHiddenByItems(const Node& node, const std::set<std::string>& hidden_items)
+{
+    switch (node.GetKind())
+    {
+        case Node::Kind::CustomSplitter:
+        case Node::Kind::GameSplitter:
+        case Node::Kind::Merger:
+        case Node::Kind::Logistics:
+            break; // pass-through logistics/flow node (splitter/merger/station/storage)
+        default:
+            return false; // producers, sinks, groups are governed elsewhere
+    }
+    bool has_item = false;
+    for (const auto& pin : node.ins)
+    {
+        if (!pin || !pin->item) continue;
+        has_item = true;
+        if (hidden_items.find(pin->item->name) == hidden_items.end())
+            return false; // a pin item is still visible => keep the node
+    }
+    for (const auto& pin : node.outs)
+    {
+        if (!pin || !pin->item) continue;
+        has_item = true;
+        if (hidden_items.find(pin->item->name) == hidden_items.end())
+            return false;
+    }
+    return has_item; // logistics node with at least one item, all hidden
 }

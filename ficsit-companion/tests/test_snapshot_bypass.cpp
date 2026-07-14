@@ -1,12 +1,16 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <memory>
+#include <set>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
 #include "domain/graph/link.hpp"
 #include "domain/graph/pin.hpp"
 #include "domain/nodes/node.hpp"
+#include "domain/nodes/node_display.hpp" // NodeLogisticsHiddenByItems
+#include "domain/gamedata/recipe.hpp"    // Item
 #include "domain/snapshot/snapshot_bypass.hpp"
 
 #include "graph_test_helpers.hpp" // IdGen, MakeLink
@@ -205,6 +209,43 @@ TEST_CASE("drop predicate leaves bypass nodes rerouting", "[snapshot_bypass]")
     auto edges = fx.RunWithDrop();
     REQUIRE(edges.size() == 1);
     REQUIRE(BypassFixture::Has(edges, p->outs[0].get(), c->ins[0].get()));
+}
+
+/// @test End-to-end: a splitter carrying ONLY a hidden item, when used as the
+/// is_hidden predicate via NodeLogisticsHiddenByItems, reroutes (default bypass)
+/// so the surrounding visible line stays connected. This mirrors how
+/// FactorySnapshotApp hides logistics for a hidden production item.
+TEST_CASE("logistics hidden by item reroutes via the default bypass", "[snapshot_bypass]")
+{
+    const Item iron_ore("Iron Ore", "", 0);
+    const Item copper_ore("Copper Ore", "", 0);
+
+    IdGen idgen;
+    auto gen = [&] { return idgen(); };
+    std::vector<std::unique_ptr<Node>> nodes;
+    std::vector<std::unique_ptr<Link>> links;
+
+    // Upstream + downstream carry a still-visible item (not logistics-hidden);
+    // the middle splitter carries only the hidden item.
+    auto up   = std::make_unique<CustomSplitterNode>(ax::NodeEditor::NodeId(idgen()), gen, &copper_ore);
+    auto mid  = std::make_unique<CustomSplitterNode>(ax::NodeEditor::NodeId(idgen()), gen, &iron_ore);
+    auto down = std::make_unique<MergerNode>(ax::NodeEditor::NodeId(idgen()), gen, &copper_ore);
+    CustomSplitterNode* up_raw = up.get();
+    CustomSplitterNode* mid_raw = mid.get();
+    MergerNode* down_raw = down.get();
+
+    links.push_back(MakeLink(idgen(), up_raw->outs[0].get(), mid_raw->ins[0].get()));
+    links.push_back(MakeLink(idgen(), mid_raw->outs[0].get(), down_raw->ins[0].get()));
+    nodes.push_back(std::move(up));
+    nodes.push_back(std::move(mid));
+    nodes.push_back(std::move(down));
+
+    const std::set<std::string> hidden = { "Iron Ore" };
+    auto edges = ComputeVisibleEdges(nodes, links,
+        [&](const Node& n) { return NodeLogisticsHiddenByItems(n, hidden); });
+
+    REQUIRE(edges.size() == 1);
+    REQUIRE(BypassFixture::Has(edges, up_raw->outs[0].get(), down_raw->ins[0].get()));
 }
 
 /// @test A chain visible -> bypass -> drop -> consumer terminates at the drop.

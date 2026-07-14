@@ -32,6 +32,14 @@ struct FactorySnapshotSession
     bool hide_mergers = true;
     bool hide_logistics_nodes = true;
 
+    /// @brief Fold each machine's measured save productivity into its rates so
+    /// the snapshot shows real (input-starved / output-blocked) throughput.
+    /// Default ON. Toggling re-imports the graph from the retained wrapper JSON.
+    bool apply_efficiency = true;
+    /// @brief Draw each link's carried items/min on the canvas. Default OFF.
+    /// Visualization-only (reads pin rates each frame; no recompute).
+    bool show_throughput = false;
+
     /// @brief Item names whose producers (Craft/Extractor) are hidden on the
     /// snapshot canvas. Empty by default => every production visible. Storing the
     /// *hidden* set (not the visible one) keeps the default empty and makes newly

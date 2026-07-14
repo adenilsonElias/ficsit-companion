@@ -9,6 +9,7 @@
 #include <fstream>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 
 #if !defined(__EMSCRIPTEN__)
 #include <filesystem>
@@ -203,9 +204,16 @@ void FactorySnapshotApp::LoadFromWrapperJson(const std::string& wrapper_json,
 {
     last_error.clear();
 
+    // Retain the JSON + options so an "Apply efficiency" toggle can re-run the
+    // one importer pipeline without re-reading the .sav. The session's toggle
+    // overrides the incoming apply_efficiency (default ON).
+    retained_wrapper_json = wrapper_json;
+    retained_options = options;
+    retained_options.apply_efficiency = session.apply_efficiency;
+
     std::string err;
     if (!FactorySnapshot::BuildSnapshotFromJson(wrapper_json,
-            [this] { return NextId(); }, options, model, err))
+            [this] { return NextId(); }, retained_options, model, err))
     {
         last_error = err;
         status_text.clear();
@@ -217,6 +225,30 @@ void FactorySnapshotApp::LoadFromWrapperJson(const std::string& wrapper_json,
        << model.warnings.size() << " warning(s)";
     status_text = st.str();
     needs_layout_apply = true; // apply imported node positions + fit on next canvas frame
+}
+
+void FactorySnapshotApp::RebuildSnapshot()
+{
+    if (retained_wrapper_json.empty()) return; // nothing imported yet
+
+    retained_options.apply_efficiency = session.apply_efficiency;
+
+    std::string err;
+    if (!FactorySnapshot::BuildSnapshotFromJson(retained_wrapper_json,
+            [this] { return NextId(); }, retained_options, model, err))
+    {
+        last_error = err;
+        return;
+    }
+
+    std::ostringstream st;
+    st << model.nodes.size() << " buildings, " << model.flow.rows.size() << " item flows, "
+       << model.warnings.size() << " warning(s)";
+    status_text = st.str();
+
+    RebuildHiddenProductionSet();
+    // Apply the (new) node positions on the next frame, but keep the camera.
+    needs_position_apply = true;
 }
 
 void FactorySnapshotApp::RenderImpl()
@@ -355,6 +387,26 @@ void FactorySnapshotApp::RenderOptionsPanel()
     }
 
     ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Rates");
+
+    if (ImGui::Checkbox("Apply real machine efficiency (from save)", &session.apply_efficiency))
+    {
+        SaveSession();
+        RebuildSnapshot(); // re-run the importer so rates + flow reflect the toggle
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Fold each machine's measured productivity from the save into its\n"
+                          "rates, so input-starved / output-blocked machines show their real\n"
+                          "throughput. Off shows nominal clock rates.");
+
+    if (ImGui::Checkbox("Show belt throughput", &session.show_throughput))
+        SaveSession(); // overlay reads the flag each frame; no recompute needed
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Draw the items/min carried by each belt / pipe on the canvas.");
+
+    ImGui::Spacing();
     if (ImGui::Button("Reset to defaults"))
     {
         session.node_font_scale = 1.0f;
@@ -365,7 +417,11 @@ void FactorySnapshotApp::RenderOptionsPanel()
         session.hide_custom_splitters = true;
         session.hide_mergers = true;
         session.hide_logistics_nodes = true;
+        const bool efficiency_was_off = !session.apply_efficiency;
+        session.apply_efficiency = true;   // default ON
+        session.show_throughput = false;   // default OFF
         RebuildVisibleEdges();
+        if (efficiency_was_off) RebuildSnapshot(); // rates changed => re-import
         SaveSession();
     }
 }
@@ -493,13 +549,14 @@ void FactorySnapshotApp::RenderGraphCanvas()
 {
     ax::NodeEditor::SetCurrentEditor(context);
 
-    if (needs_layout_apply)
+    if (needs_layout_apply || needs_position_apply)
     {
         for (const auto& node : model.nodes)
         {
             ax::NodeEditor::SetNodePosition(node->id, node->pos);
         }
         RebuildVisibleEdges();
+        needs_position_apply = false;
     }
 
     // Capture the unscaled line height before applying the font scale, so the
@@ -507,6 +564,9 @@ void FactorySnapshotApp::RenderGraphCanvas()
     node_base_line = ImGui::GetTextLineHeightWithSpacing();
 
     ax::NodeEditor::Begin("##snapshot_graph", ImGui::GetContentRegionAvail());
+
+    // Fresh pin-center capture each frame (screen space), for the throughput overlay.
+    pin_centers.clear();
 
     // Scale only the snapshot node text (Options > Box font size). Reset after
     // the node pass so nothing else in this window is affected.
@@ -520,6 +580,9 @@ void FactorySnapshotApp::RenderGraphCanvas()
     RenderSnapshotLinks();
 
     ax::NodeEditor::End();
+
+    // Belt-throughput labels, drawn after End() so they sit above the graph.
+    if (session.show_throughput) RenderThroughputOverlay();
 
     if (needs_layout_apply)
     {
@@ -598,6 +661,7 @@ void FactorySnapshotApp::RenderSnapshotNodeDetailed(const Node& node)
     {
         ax::NodeEditor::BeginPin(pin->id, pin->direction);
         DrawPinIcon(pin->item);
+        RecordPinCenter(pin->id); // anchor at the icon (link attaches here)
         ImGui::SameLine();
         ImGui::TextUnformatted(PinLabel(*pin).c_str());
         ax::NodeEditor::EndPin();
@@ -613,6 +677,7 @@ void FactorySnapshotApp::RenderSnapshotNodeDetailed(const Node& node)
         ImGui::TextUnformatted(PinLabel(*pin).c_str());
         ImGui::SameLine();
         DrawPinIcon(pin->item);
+        RecordPinCenter(pin->id); // anchor at the icon (link attaches here)
         ax::NodeEditor::EndPin();
     }
     ImGui::EndGroup();
@@ -659,6 +724,7 @@ void FactorySnapshotApp::RenderSnapshotNodeCollapsed(const Node& node, SnapshotC
     {
         ax::NodeEditor::BeginPin(pin->id, pin->direction);
         ImGui::Dummy(ImVec2(1.0f, 1.0f));
+        RecordPinCenter(pin->id);
         ax::NodeEditor::EndPin();
     }
     ImGui::EndGroup();
@@ -704,6 +770,7 @@ void FactorySnapshotApp::RenderSnapshotNodeCollapsed(const Node& node, SnapshotC
     {
         ax::NodeEditor::BeginPin(pin->id, pin->direction);
         ImGui::Dummy(ImVec2(1.0f, 1.0f));
+        RecordPinCenter(pin->id);
         ax::NodeEditor::EndPin();
     }
     ImGui::EndGroup();
@@ -739,6 +806,10 @@ void FactorySnapshotApp::RebuildHiddenProductionSet()
 bool FactorySnapshotApp::IsNodeHidden(const Node& node) const
 {
     if (NodeProductionHidden(node, hidden_production_set)) return true;
+    // A splitter/merger/station/storage that carries ONLY hidden items is hidden
+    // too, so unchecking an item hides its whole line. These reroute (bypass)
+    // rather than drop (see RebuildVisibleEdges::should_bypass).
+    if (NodeLogisticsHiddenByItems(node, hidden_production_set)) return true;
     if (!session.hide_logistics_enabled) return false;
     switch (node.GetKind())
     {
@@ -772,5 +843,57 @@ void FactorySnapshotApp::RenderSnapshotLinks()
     for (const CachedEdge& ce : visible_edges)
     {
         ax::NodeEditor::Link(ce.id, ce.edge.start_id, ce.edge.end_id);
+    }
+}
+
+void FactorySnapshotApp::RecordPinCenter(ax::NodeEditor::PinId id)
+{
+    const ImVec2 mn = ImGui::GetItemRectMin();
+    const ImVec2 mx = ImGui::GetItemRectMax();
+    pin_centers[id.Get()] = ImVec2((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
+}
+
+void FactorySnapshotApp::RenderThroughputOverlay()
+{
+    if (visible_edges.empty() || pin_centers.empty()) return;
+
+    // pin id -> its output pin's rate. The source (start) of an edge is always an
+    // output pin; map those so each edge can show the items/min it carries.
+    std::unordered_map<std::uintptr_t, FractionalNumber> rate_by_pin;
+    for (const auto& node : model.nodes)
+        for (const auto& pin : node->outs)
+            if (pin) rate_by_pin[pin->id.Get()] = pin->current_rate;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 clip_min = dl->GetClipRectMin();
+    const ImVec2 clip_max = dl->GetClipRectMax();
+    const ImU32 text_col = IM_COL32(255, 255, 255, 255);
+    const ImU32 pill_col = IM_COL32(20, 20, 24, 205);
+
+    for (const CachedEdge& ce : visible_edges)
+    {
+        const auto s = pin_centers.find(ce.edge.start_id.Get());
+        const auto e = pin_centers.find(ce.edge.end_id.Get());
+        if (s == pin_centers.end() || e == pin_centers.end()) continue;
+
+        const auto r = rate_by_pin.find(ce.edge.start_id.Get());
+        if (r == rate_by_pin.end()) continue;
+
+        const ImVec2 mid((s->second.x + e->second.x) * 0.5f,
+                         (s->second.y + e->second.y) * 0.5f);
+        // Skip labels outside the visible canvas (culled/offscreen pins).
+        if (mid.x < clip_min.x || mid.x > clip_max.x ||
+            mid.y < clip_min.y || mid.y > clip_max.y) continue;
+
+        FractionalNumber rate = r->second; // copy: GetStringFloat() is non-const
+        const std::string label = rate.GetStringFloat() + "/min";
+
+        const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+        const ImVec2 pad(4.0f, 2.0f);
+        const ImVec2 tl(mid.x - ts.x * 0.5f, mid.y - ts.y * 0.5f);
+        dl->AddRectFilled(ImVec2(tl.x - pad.x, tl.y - pad.y),
+                          ImVec2(tl.x + ts.x + pad.x, tl.y + ts.y + pad.y),
+                          pill_col, 3.0f);
+        dl->AddText(tl, text_col, label.c_str());
     }
 }

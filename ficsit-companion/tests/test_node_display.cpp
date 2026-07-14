@@ -151,6 +151,91 @@ TEST_CASE("NodeProductionHidden keeps multi-output producers with a visible outp
     REQUIRE(NodeProductionHidden(producer, { "Iron Ingot", "Slag" }) == true);   // all hidden
 }
 
+/// @test A producer that still CONSUMES a visible item stays visible even when
+/// all of its outputs are hidden — so "show only Cable" keeps the machine that
+/// consumes Cable to make a (hidden) Crystal Oscillator, preserving where the
+/// cable goes.
+/// @covers NodeProductionHidden input-pin awareness ("any visible item keeps it").
+TEST_CASE("NodeProductionHidden keeps producers that consume a visible item", "[node_display]")
+{
+    const Item cable("Cable", "", 0);
+    const Item oscillator("Crystal Oscillator", "", 0);
+
+    // A producer of Crystal Oscillator (hidden) that also consumes Cable (visible).
+    // Built from an extractor plus a manually-added input pin carrying Cable; the
+    // predicate is pin-based, so the node kind used to host the pins is irrelevant.
+    ExtractorNode producer(90, ExtractorNode::Kind::MinerMk1, &oscillator, ExtractorNode::Purity::Normal, Gen);
+    producer.ins.push_back(std::make_unique<Pin>(
+        ax::NodeEditor::PinId(Gen()), ax::NodeEditor::PinKind::Input, &producer, &cable));
+
+    // Output hidden, but a consumed input (Cable) is still visible => keep it.
+    REQUIRE(NodeProductionHidden(producer, { "Crystal Oscillator" }) == false);
+    // Every item it touches (input and output) hidden => hide it.
+    REQUIRE(NodeProductionHidden(producer, { "Crystal Oscillator", "Cable" }) == true);
+}
+
+/// @test NodeLogisticsHiddenByItems hides a splitter/merger/station/storage only
+/// when it is a logistics/flow node carrying at least one item and EVERY item on
+/// its pins is hidden. Producers and sinks are never hidden by this predicate.
+/// @covers NodeLogisticsHiddenByItems kind gate + "all pin items hidden" rule.
+TEST_CASE("NodeLogisticsHiddenByItems hides logistics carrying only hidden items", "[node_display]")
+{
+    const Item iron_ore("Iron Ore", "", 0);
+    const Item copper_ore("Copper Ore", "", 0);
+
+    // A splitter carrying only Iron Ore is hidden when Iron Ore is hidden.
+    CustomSplitterNode splitter(80, Gen, &iron_ore);
+    REQUIRE(NodeLogisticsHiddenByItems(splitter, { "Iron Ore" }) == true);
+    REQUIRE(NodeLogisticsHiddenByItems(splitter, { "Copper Ore" }) == false);
+    REQUIRE(NodeLogisticsHiddenByItems(splitter, {}) == false);
+}
+
+/// @test A logistics node carrying BOTH a hidden and a still-visible item stays
+/// visible (all-hidden rule), matching the multi-output producer behaviour.
+/// @covers NodeLogisticsHiddenByItems "any visible item keeps it" branch.
+TEST_CASE("NodeLogisticsHiddenByItems keeps mixed-item logistics visible", "[node_display]")
+{
+    const Item iron_ore("Iron Ore", "", 0);
+    const Item copper_ore("Copper Ore", "", 0);
+
+    // A merger whose pins carry Iron Ore, with one input pin overridden to a
+    // still-visible Copper Ore, is NOT hidden while Copper Ore stays visible.
+    MergerNode merger(81, Gen, &iron_ore);
+    merger.ins[0]->item = &copper_ore;
+    REQUIRE(NodeLogisticsHiddenByItems(merger, { "Iron Ore" }) == false);
+    REQUIRE(NodeLogisticsHiddenByItems(merger, { "Iron Ore", "Copper Ore" }) == true);
+}
+
+/// @test A storage (LogisticsNode) carrying only a hidden item is hidden; a
+/// logistics node with no resolved pin items is never hidden (unknown cargo).
+/// @covers NodeLogisticsHiddenByItems Logistics kind + no-item guard.
+TEST_CASE("NodeLogisticsHiddenByItems handles storage and empty pins", "[node_display]")
+{
+    const Item iron_ore("Iron Ore", "", 0);
+
+    LogisticsNode storage(82, LogisticsNode::Kind::Storage, 1, 1, Gen);
+    // No items resolved on any pin => not hidden (we can't know what it carries).
+    REQUIRE(NodeLogisticsHiddenByItems(storage, { "Iron Ore" }) == false);
+
+    storage.ins[0]->item = &iron_ore;
+    storage.outs[0]->item = &iron_ore;
+    REQUIRE(NodeLogisticsHiddenByItems(storage, { "Iron Ore" }) == true);
+}
+
+/// @test Non-logistics nodes (producers, sinks) are never hidden by this
+/// predicate even when they carry the hidden item; they are governed elsewhere.
+/// @covers NodeLogisticsHiddenByItems kind gate rejects Craft/Extractor/Sink.
+TEST_CASE("NodeLogisticsHiddenByItems ignores producers and sinks", "[node_display]")
+{
+    const Item iron_ore("Iron Ore", "", 0);
+
+    ExtractorNode miner(83, ExtractorNode::Kind::MinerMk1, &iron_ore, ExtractorNode::Purity::Normal, Gen);
+    REQUIRE(NodeLogisticsHiddenByItems(miner, { "Iron Ore" }) == false);
+
+    SinkNode sink(84, Gen, &iron_ore);
+    REQUIRE(NodeLogisticsHiddenByItems(sink, { "Iron Ore" }) == false);
+}
+
 /// @test NodeSnapshotCategory maps each node kind (and logistics sub-kind) to its
 /// coarse visual category, used to color snapshot nodes so categories are
 /// distinguishable at any zoom.

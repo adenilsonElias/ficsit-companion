@@ -20,6 +20,8 @@ std::string FactorySnapshotSession::Serialize() const
     v["hide_custom_splitters"] = hide_custom_splitters;
     v["hide_mergers"] = hide_mergers;
     v["hide_logistics_nodes"] = hide_logistics_nodes;
+    v["apply_efficiency"] = apply_efficiency;
+    v["show_throughput"] = show_throughput;
     Json::Array hidden_items;
     for (const std::string& name : hidden_production_items)
         hidden_items.push_back(Json::Value(name));
@@ -45,6 +47,8 @@ void FactorySnapshotSession::Deserialize(const std::string& json)
     if (v.contains("hide_custom_splitters") && v["hide_custom_splitters"].is_bool()) hide_custom_splitters = v["hide_custom_splitters"].get<bool>();
     if (v.contains("hide_mergers") && v["hide_mergers"].is_bool()) hide_mergers = v["hide_mergers"].get<bool>();
     if (v.contains("hide_logistics_nodes") && v["hide_logistics_nodes"].is_bool()) hide_logistics_nodes = v["hide_logistics_nodes"].get<bool>();
+    if (v.contains("apply_efficiency") && v["apply_efficiency"].is_bool()) apply_efficiency = v["apply_efficiency"].get<bool>();
+    if (v.contains("show_throughput") && v["show_throughput"].is_bool()) show_throughput = v["show_throughput"].get<bool>();
     if (v.contains("hidden_production_items") && v["hidden_production_items"].is_array())
     {
         hidden_production_items.clear();

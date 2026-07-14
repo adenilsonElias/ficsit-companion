@@ -7,6 +7,7 @@
 #include "domain/nodes/node.hpp"
 #include "domain/graph/pin.hpp"
 #include "domain/gamedata/recipe.hpp"
+#include "domain/snapshot/rate_propagation.hpp"
 #include "domain/vehicle/vehicle_route.hpp"
 #include "app/utils.hpp"
 
@@ -157,6 +158,26 @@ namespace SavImport
             // 4 (e.g. 87.5000%).
             const long long num = static_cast<long long>(std::llround(clock * 1000.0));
             return FractionalNumber(num, 1000);
+        }
+
+        // Measured productivity in [0,1] -> exact fraction. Unlike ClockToFraction
+        // (which clamps <=0 to full clock), an efficiency of 0 means the machine
+        // produced nothing in the last window and MUST map to 0, not 1.
+        FractionalNumber EfficiencyToFraction(double efficiency)
+        {
+            if (!std::isfinite(efficiency) || efficiency <= 0.0) return FractionalNumber(0, 1);
+            if (efficiency >= 1.0) return FractionalNumber(1, 1);
+            const long long num = static_cast<long long>(std::llround(efficiency * 1000.0));
+            return FractionalNumber(num, 1000);
+        }
+
+        // The rate to seed a producer with: nominal clock, optionally scaled by
+        // the machine's measured save productivity.
+        FractionalNumber SeedRate(double clock, double efficiency, bool apply_efficiency)
+        {
+            FractionalNumber rate = ClockToFraction(clock);
+            if (apply_efficiency) rate = rate * EfficiencyToFraction(efficiency);
+            return rate;
         }
 
         void ApplyCompactLayout(std::vector<std::unique_ptr<Node>>& nodes, const std::vector<std::unique_ptr<Link>>& links)
@@ -462,6 +483,10 @@ namespace SavImport
                 if (b.contains("clock") && b["clock"].is_number())
                 {
                     building.clock = b["clock"].get<double>();
+                }
+                if (b.contains("efficiency") && b["efficiency"].is_number())
+                {
+                    building.efficiency = b["efficiency"].get<double>();
                 }
                 if (b.contains("somersloops") && b["somersloops"].is_number())
                 {
@@ -879,7 +904,7 @@ namespace SavImport
                 }
                 auto craft = std::make_unique<CraftNode>(id_generator(), recipe, id_generator);
                 craft->num_somersloop = FractionalNumber(static_cast<long long>(b.somersloops));
-                craft->UpdateRate(ClockToFraction(b.clock));
+                craft->UpdateRate(SeedRate(b.clock, b.efficiency, options.apply_efficiency));
                 node = std::move(craft);
                 break;
             }
@@ -910,7 +935,7 @@ namespace SavImport
                 }
 
                 auto extractor = std::make_unique<ExtractorNode>(id_generator(), ekind, resource, purity, id_generator);
-                extractor->UpdateRate(ClockToFraction(b.clock));
+                extractor->UpdateRate(SeedRate(b.clock, b.efficiency, options.apply_efficiency));
                 node = std::move(extractor);
                 break;
             }
@@ -1332,7 +1357,7 @@ namespace SavImport
         // instead of silently painting the whole chain as whichever item was
         // seen first. This runs after wiring so multi-output machines (e.g.
         // refineries) contribute the actual connected pin item.
-        std::unordered_set<Node*> mixed_item_nodes;
+        std::unordered_set<const Node*> mixed_item_nodes;
         for (const auto& [building_id, node_index] : id_to_index)
         {
             Node* node = out.nodes[node_index].get();
@@ -1703,123 +1728,13 @@ namespace SavImport
         }
 
         // Forward-propagate rates from producers (CraftNode/Extractor outputs
-        // have current_rate set by UpdateRate above) through the wired graph.
-        // We don't invoke the full equation solver here because that lives on
-        // ProductionApp; this best-effort pass handles the common chains so the
-        // user sees correct rates on storages, stations, sinks, and the
-        // organizers in between right after import:
-        //   - Merger output  = sum(inputs)
-        //   - Splitter outs  = input / count(connected outputs)
-        //   - Logistics outs = sum(inputs) / count(connected outputs)
-        //   - Link propagation copies upstream output rate onto the downstream
-        //     input pin, except for CraftNode/Extractor pins, whose rates come
-        //     from the recipe and must not be overwritten.
-        // Iterates to a fixed point so multi-hop chains converge.
-        constexpr int kMaxRatePropagationIters = 64;
-        for (int iter = 0; iter < kMaxRatePropagationIters; ++iter)
-        {
-            bool changed = false;
-
-            for (const auto& node : out.nodes)
-            {
-                if (node->IsMerger())
-                {
-                    FractionalNumber sum(0, 1);
-                    for (const auto& p : node->ins) sum = sum + p->current_rate;
-                    Pin* op = node->outs[0].get();
-                    if (op->current_rate != sum)
-                    {
-                        op->current_rate = sum;
-                        changed = true;
-                    }
-                }
-                else if (node->IsGameSplitter() || node->IsCustomSplitter())
-                {
-                    size_t connected_outs = 0;
-                    for (const auto& p : node->outs)
-                    {
-                        if (p->link != nullptr) connected_outs += 1;
-                    }
-                    if (connected_outs == 0) continue;
-                    const FractionalNumber per_out = node->ins[0]->current_rate
-                        / FractionalNumber(static_cast<long long>(connected_outs));
-                    for (const auto& p : node->outs)
-                    {
-                        if (p->link == nullptr) continue;
-                        if (p->current_rate != per_out)
-                        {
-                            p->current_rate = per_out;
-                            changed = true;
-                        }
-                    }
-                }
-                else if (node->IsLogistics())
-                {
-                    FractionalNumber sum(0, 1);
-                    const Item* in_item = nullptr;
-                    for (const auto& p : node->ins)
-                    {
-                        if (IsStationFuelPin(node.get(), p.get())) continue;
-                        sum = sum + p->current_rate;
-                        if (in_item == nullptr) in_item = p->item;
-                    }
-                    size_t connected_outs = 0;
-                    for (const auto& p : node->outs)
-                    {
-                        if (p->link != nullptr) connected_outs += 1;
-                    }
-                    if (connected_outs == 0) continue;
-                    const FractionalNumber per_out = sum
-                        / FractionalNumber(static_cast<long long>(connected_outs));
-                    for (const auto& p : node->outs)
-                    {
-                        if (p->link == nullptr) continue;
-                        if (p->current_rate != per_out)
-                        {
-                            p->current_rate = per_out;
-                            changed = true;
-                        }
-                        // Pass-through item: a storage / station's output
-                        // carries whatever its inputs carry. Without this the
-                        // last storage in a chain ends up displaying the item
-                        // of whatever non-logistics node it happens to feed.
-                        if (mixed_item_nodes.find(node.get()) == mixed_item_nodes.end()
-                            && in_item != nullptr
-                            && p->item != in_item)
-                        {
-                            p->item = in_item;
-                            changed = true;
-                        }
-                    }
-                }
-            }
-
-            for (const auto& link : out.links)
-            {
-                if (link->start == nullptr || link->end == nullptr) continue;
-                Pin* upstream = link->start;
-                Pin* downstream = link->end;
-                if (downstream->node->IsCraft() || downstream->node->IsExtractor()) continue;
-                if (downstream->current_rate != upstream->current_rate)
-                {
-                    downstream->current_rate = upstream->current_rate;
-                    changed = true;
-                }
-                // Item: only copy upstream onto downstream when the downstream
-                // is a logistics input. Organizer pins are handled by their
-                // own ChangeItem step earlier; CraftNode/Extractor/Sink keep
-                // their recipe/resource-bound items.
-                if (downstream->node->IsLogistics()
-                    && upstream->item != nullptr
-                    && downstream->item != upstream->item)
-                {
-                    downstream->item = upstream->item;
-                    changed = true;
-                }
-            }
-
-            if (!changed) break;
-        }
+        // have current_rate set by UpdateRate above) through the wired graph so
+        // the user sees correct rates on storages, stations, sinks, and the
+        // organizers in between right after import. We don't invoke the full
+        // equation solver here because that lives on ProductionApp; this
+        // best-effort pass (shared with the Factory Snapshot app) handles the
+        // common chains. See domain/snapshot/rate_propagation.hpp for the rules.
+        PropagateRates(out.nodes, out.links, mixed_item_nodes);
 
         // ---- Step: connection consistency / serial pass-through validation ----
         // The forward pass above distributes a splitter's (and storage's) input
@@ -1838,6 +1753,7 @@ namespace SavImport
         //   - merger / sink inputs                 ← upstream supply (link copy)
         // A genuine imbalance (producer supply != total downstream demand) is
         // left as a single red link at the producer boundary and reported below.
+        constexpr int kMaxRatePropagationIters = 64;
         for (int iter = 0; iter < kMaxRatePropagationIters; ++iter)
         {
             bool changed = false;

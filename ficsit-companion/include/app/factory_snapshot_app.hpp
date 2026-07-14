@@ -1,8 +1,11 @@
 #pragma once
 
+#include <cstdint>
 #include <set>
 #include <string>
+#include <unordered_map>
 
+#include <imgui.h>
 #include <imgui_node_editor.h>
 
 #include "app/base_app.hpp"
@@ -33,6 +36,14 @@ protected:
 private:
     void LoadSession();
 
+    /// @brief Re-run the import from the retained wrapper JSON with the current
+    /// session.apply_efficiency, replacing the model in place. Used when the
+    /// "Apply efficiency" toggle changes so the whole graph (rates, flow report,
+    /// belt throughput) stays consistent with the one importer pipeline. Keeps
+    /// the current camera (applies node positions without recentering). No-op if
+    /// nothing has been imported yet.
+    void RebuildSnapshot();
+
     void RenderStatusLine();
     void RenderTopologySummary();
     void RenderResourceFlowTable();
@@ -57,6 +68,18 @@ private:
     void RenderSnapshotNodeCollapsed(const Node& node, SnapshotCategory category, float zoom);
     /// @brief Draw the links between node pins (purely visual).
     void RenderSnapshotLinks();
+    /// @brief When session.show_throughput is on, draw each visible edge's
+    /// items/min at its midpoint (screen space), using pin_centers captured
+    /// during the node pass and the source output pin's current_rate.
+    void RenderThroughputOverlay();
+
+    /// @brief Screen-space center of each pin's icon/marker, keyed by pin id.
+    /// Filled during the node pass each frame; consumed by the throughput
+    /// overlay after the editor End(). Cleared at the start of every frame.
+    std::unordered_map<std::uintptr_t, ImVec2> pin_centers;
+    /// @brief Record the just-drawn pin item's screen-center under `id` (called
+    /// right after a pin's icon/marker is submitted).
+    void RecordPinCenter(ax::NodeEditor::PinId id);
 
     /// @brief True when `node` should be hidden under the current session
     /// hide-* toggles (master off => always false).
@@ -81,6 +104,18 @@ private:
     /// @brief Set after a successful import; consumed on the next canvas frame to
     /// apply imported node positions and fit the view.
     bool needs_layout_apply = false;
+    /// @brief Like needs_layout_apply but WITHOUT recentering the camera: applies
+    /// node positions after an in-place rebuild (efficiency toggle) so the user's
+    /// current pan/zoom is preserved.
+    bool needs_position_apply = false;
+
+    /// @brief The wrapper JSON of the last import, retained so an efficiency
+    /// toggle can re-run the importer without re-reading the .sav. Empty until
+    /// the first successful import.
+    std::string retained_wrapper_json;
+    /// @brief Build options of the last import; apply_efficiency is overwritten
+    /// from the session on each (re)build.
+    SavImport::BuildOptions retained_options;
 
     /// @brief Cached effective edges to draw (hidden nodes bypassed). Each entry
     /// pairs a SnapshotEdge with a stable editor link id. Rebuilt on import and

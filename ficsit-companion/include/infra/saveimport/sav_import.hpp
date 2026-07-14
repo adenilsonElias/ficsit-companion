@@ -41,6 +41,11 @@ namespace SavImport
         std::string item_name;
         /// @brief Overclock multiplier, e.g. 1.0 = 100%
         double clock = 1.0;
+        /// @brief Measured machine productivity in [0,1] read from the save
+        /// (produce-duration / total-duration of the last measurement window);
+        /// 1.0 when the save has no readable productivity. Folded into producer
+        /// rates only when BuildOptions::apply_efficiency is set.
+        double efficiency = 1.0;
         /// @brief Number of somersloops slotted in this machine
         int somersloops = 0;
         /// @brief Extractor specifics. Only meaningful when kind == Miner.
@@ -166,6 +171,12 @@ namespace SavImport
         /// station's route_links. Load/unload direction comes from the
         /// station's mode (set on import from is_unloader), not belt inference.
         bool connect_vehicle_routes = false;
+        /// @brief If true, fold each producer's measured save productivity
+        /// (Building::efficiency) into its seeded rate, so the whole imported
+        /// graph reflects real (input-starved / output-blocked) throughput
+        /// rather than nominal clock. Off by default so other tools and the
+        /// existing importer behavior are unchanged.
+        bool apply_efficiency = false;
     };
 
     /// @brief Build Node/Pin/Link graph from a ParseResult.

@@ -404,6 +404,42 @@ function readIntPropValue(props, name) {
     return null;
 }
 
+function readFloatPropValue(props, name) {
+    const raw = findProp(props, name);
+    if (typeof raw === "number") return raw;
+    if (raw && typeof raw === "object" && typeof raw.value === "number") return raw.value;
+    return NaN;
+}
+
+function clamp01(x) {
+    if (!(x >= 0)) return 0;   // also maps NaN -> 0 (callers guard finiteness first)
+    return x > 1 ? 1 : x;
+}
+
+// Read a manufacturer/generator/extractor's measured productivity in [0,1].
+//
+// Satisfactory 1.2 saves store no direct productivity scalar; instead each
+// producing machine keeps rolling "productivity measurement" windows as a
+// produce-duration / total-duration pair (verified against a real 1.2 save:
+// there is no mCurrentProductivity, but every machine carries
+// mLast*/mCurrent* measurement durations). Prefer the LAST completed window
+// (a full window, present on nearly every machine and the most stable read);
+// fall back to the in-progress CURRENT window; and default to 1.0 when neither
+// is present so the feature degrades to "no change".
+function readProductivity(props) {
+    const lastProduce = readFloatPropValue(props, "mLastProductivityMeasurementProduceDuration");
+    const lastTotal = readFloatPropValue(props, "mLastProductivityMeasurementDuration");
+    if (Number.isFinite(lastProduce) && Number.isFinite(lastTotal) && lastTotal > 0) {
+        return clamp01(lastProduce / lastTotal);
+    }
+    const curProduce = readFloatPropValue(props, "mCurrentProductivityMeasurementProduceDuration");
+    const curTotal = readFloatPropValue(props, "mCurrentProductivityMeasurementDuration");
+    if (Number.isFinite(curProduce) && Number.isFinite(curTotal) && curTotal > 0) {
+        return clamp01(curProduce / curTotal);
+    }
+    return 1.0;
+}
+
 // A pipe connector on a machine (FGPipeConnectionFactory) or on plumbing
 // (FGPipeConnectionComponent). Connected pipe connectors carry mPipeNetworkID;
 // belt connectors and unconnected pipe ports do not, so those return null.
@@ -453,4 +489,5 @@ module.exports = {
     resolveGeneratorFuelItem,
     pipeConnectorInfo,
     readPipeNetwork,
+    readProductivity,
 };
