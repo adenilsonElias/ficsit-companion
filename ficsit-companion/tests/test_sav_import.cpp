@@ -356,8 +356,8 @@ TEST_CASE("BuildGraph keeps upstream resource item through smart splitter before
         return pin->item != nullptr && pin->item->name == "Coal";
     });
     REQUIRE(coal_pin != foundry->ins.end());
-    REQUIRE((*coal_pin)->link != nullptr);
-    REQUIRE((*coal_pin)->link->start->node == splitter);
+    REQUIRE_FALSE((*coal_pin)->links.empty());
+    REQUIRE((*coal_pin)->SoleLink()->start->node == splitter);
 }
 
 /// @test   A miner whose resource the save did not record must resolve to the
@@ -438,11 +438,11 @@ TEST_CASE("BuildGraph routes a station fuel belt to the fuel pin", "[sav_import]
     REQUIRE(!station->ins.empty());
     // The dedicated fuel pin is the last input pin; the Coal belt must land there.
     Pin* fuel_pin = station->ins.back().get();
-    REQUIRE(fuel_pin->link != nullptr);
+    REQUIRE_FALSE(fuel_pin->links.empty());
     // No cargo (non-fuel) input pin should carry the fuel belt.
     for (size_t i = 0; i + 1 < station->ins.size(); ++i)
     {
-        REQUIRE(station->ins[i]->link == nullptr);
+        REQUIRE(station->ins[i]->links.empty());
     }
 }
 
@@ -472,14 +472,14 @@ TEST_CASE("BuildGraph splits a loader station's fuel and cargo belts by inventor
     REQUIRE(station->IsLogistics());
     // Fuel pin (last input) carries Coal from the coal miner.
     Pin* fuel_pin = station->ins.back().get();
-    REQUIRE(fuel_pin->link != nullptr);
-    REQUIRE(fuel_pin->link->start->node == out.nodes[0].get());
+    REQUIRE_FALSE(fuel_pin->links.empty());
+    REQUIRE(fuel_pin->SoleLink()->start->node == out.nodes[0].get());
     // A cargo input pin carries Iron Ore from the iron miner.
     bool iron_on_cargo = false;
     for (size_t i = 0; i + 1 < station->ins.size(); ++i)
     {
-        if (station->ins[i]->link != nullptr &&
-            station->ins[i]->link->start->node == out.nodes[1].get())
+        if (!station->ins[i]->links.empty() &&
+            station->ins[i]->SoleLink()->start->node == out.nodes[1].get())
         {
             iron_on_cargo = true;
         }
@@ -577,10 +577,10 @@ TEST_CASE("BuildGraph routes an unloader's input belt to fuel even when fuel equ
     REQUIRE(station->IsLogistics());
     REQUIRE(!station->ins.empty());
     Pin* fuel_pin = station->ins.back().get();
-    REQUIRE(fuel_pin->link != nullptr);
+    REQUIRE_FALSE(fuel_pin->links.empty());
     for (size_t i = 0; i + 1 < station->ins.size(); ++i)
     {
-        REQUIRE(station->ins[i]->link == nullptr);
+        REQUIRE(station->ins[i]->links.empty());
     }
 }
 
@@ -623,8 +623,8 @@ TEST_CASE("BuildGraph wires vehicle routes as plug route links", "[sav_import]")
     REQUIRE(rl->start == loader->plug.get());
     REQUIRE(rl->end == unloader->plug.get());
     // Plugs carry no Pin::link (route links live in route_links only).
-    REQUIRE(loader->plug->link == nullptr);
-    REQUIRE(unloader->plug->link == nullptr);
+    REQUIRE(loader->plug->links.empty());
+    REQUIRE(unloader->plug->links.empty());
 }
 
 /// @test   A (loader, unloader) pair shared by two vehicle routes is wired by a
@@ -730,7 +730,7 @@ TEST_CASE("BuildGraph balances cargo rate across an imported route pool", "[sav_
     bool balanced = false;
     for (const auto& p : unloader->outs)
     {
-        if (p->link != nullptr && p->item != nullptr
+        if (!p->links.empty() && p->item != nullptr
             && p->current_rate == loader_in->current_rate)
         {
             balanced = true;
@@ -978,10 +978,10 @@ TEST_CASE("BuildGraph keeps Water Extractor to PipeJunction links at extractor o
     REQUIRE(junction->ins.size() == 2);
     REQUIRE(junction->ins[0]->current_rate == FractionalNumber(120, 1));
     REQUIRE(junction->ins[1]->current_rate == FractionalNumber(120, 1));
-    REQUIRE(junction->ins[0]->link != nullptr);
-    REQUIRE(junction->ins[0]->link->start->current_rate == junction->ins[0]->current_rate);
-    REQUIRE(junction->ins[1]->link != nullptr);
-    REQUIRE(junction->ins[1]->link->start->current_rate == junction->ins[1]->current_rate);
+    REQUIRE_FALSE(junction->ins[0]->links.empty());
+    REQUIRE(junction->ins[0]->SoleLink()->start->current_rate == junction->ins[0]->current_rate);
+    REQUIRE_FALSE(junction->ins[1]->links.empty());
+    REQUIRE(junction->ins[1]->SoleLink()->start->current_rate == junction->ins[1]->current_rate);
 }
 
 /// @covers SavImport::BuildGraph skips a pipe network whose fluid is unknown.

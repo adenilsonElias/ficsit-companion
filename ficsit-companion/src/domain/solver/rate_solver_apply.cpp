@@ -19,7 +19,9 @@ bool ApplyResults(const SolveInputs& in, const SeedResult& seed, const VariableM
                   LinearSystem& sys, ReducedSystem& reduced,
                   float& error_time, float error_flow_duration)
 {
-    std::unordered_set<const Pin*> processed_pins;
+    // Keyed by variable index, not by pin: link variables have no pin, so keying by pin would
+    // collide every one of them on the same null key.
+    std::unordered_set<int> processed_variables;
     // Loop until we resolved all free variables
     while (true)
     {
@@ -58,11 +60,102 @@ bool ApplyResults(const SolveInputs& in, const SeedResult& seed, const VariableM
         const int free_index = *free_variables.begin();
         const Pin* pin = vars.reversed_variable_map[free_index];
 
-        // If we haven't met this free pin yet
-        if (processed_pins.find(pin) == processed_pins.end())
+        // If we haven't met this free variable yet
+        if (processed_variables.find(free_index) == processed_variables.end())
         {
+            const auto link_it = vars.variable_of_link.find(free_index);
             const auto group_it = (pin == nullptr) ? vars.group_membership.end() : vars.group_membership.find(pin);
-            if (pin == nullptr)
+            if (link_it != vars.variable_of_link.end())
+            {
+                const Link* free_link = link_it->second;
+                // Which pin owns the split this edge belongs to: the end that fans out. When both
+                // ends fan out, the output side arbitrates - it is the one dividing a supply.
+                const Pin* owner = nullptr;
+                if (free_link->start != nullptr && free_link->start->links.size() > 1) owner = free_link->start;
+                else if (free_link->end != nullptr && free_link->end->links.size() > 1) owner = free_link->end;
+
+                if (owner == nullptr)
+                {
+                    // A lone edge with nothing driving it: keep the rate it already carried.
+                    sys.equations_coefficients.push_back(std::vector<FractionalNumber>(vars.num_variables));
+                    sys.equations_coefficients.back()[free_index] = 1;
+                    sys.constants.push_back(free_link->current_rate);
+                }
+                else
+                {
+                    // The owner pin's total is pinned by its own balance equation, but how that
+                    // total divides across the branches is free. Keep each branch at its prior
+                    // share, which is the same rule a CustomSplitter uses for its output pins.
+                    //
+                    // A branch whose far pin is locked is fixed: it folds into the constant, and
+                    // the unlocked branches share whatever is left.
+                    //   x_l - multiplier * rate(owner) = -multiplier * sum_locked
+                    // where rate(owner) is coef * var(owner), since a craft node's pins share one
+                    // variable scaled by the recipe quantity.
+                    auto far_pin = [owner](const Link* l) {
+                        return l->start == owner ? l->end : l->start;
+                    };
+                    auto branch_locked = [&](const Link* l) {
+                        const Pin* far = far_pin(l);
+                        return far != nullptr && far->GetLocked();
+                    };
+                    // A branch whose far pin is the very pin the user is driving is already
+                    // spoken for: its rate is dictated from outside, so it must not be dragged
+                    // back to its prior share. This is what makes "wire up a new consumer" work -
+                    // there the new branch is the constraint, and the old branches absorb nothing.
+                    auto branch_constrained = [&](const Link* l) {
+                        return far_pin(l) == in.constraint_pin;
+                    };
+
+                    FractionalNumber old_sum_free(0, 1);
+                    FractionalNumber sum_locked(0, 1);
+                    size_t num_free = 0;
+                    std::vector<const Link*> constrained;
+                    for (const Link* l : owner->links)
+                    {
+                        if (branch_constrained(l)) { constrained.push_back(l); }
+                        else if (branch_locked(l)) { sum_locked += l->current_rate; }
+                        else { old_sum_free += l->current_rate; num_free += 1; }
+                    }
+
+                    if (num_free == 0)
+                    {
+                        sys.equations_coefficients.push_back(std::vector<FractionalNumber>(vars.num_variables));
+                        sys.equations_coefficients.back()[free_index] = 1;
+                        sys.constants.push_back(free_link->current_rate);
+                    }
+                    else
+                    {
+                        const std::pair<size_t, FractionalNumber>& owner_variable =
+                            vars.associated_variable_index.at(owner);
+                        // Constrain every free branch at once, not just this one: pinning a single
+                        // branch would leave the split unbalanced. Each takes its prior share of
+                        // what is left after the locked and externally-driven branches.
+                        //   x_l + m * sum(constrained) - m * rate(owner) = -m * sum_locked
+                        for (const Link* l : owner->links)
+                        {
+                            if (branch_locked(l) || branch_constrained(l))
+                            {
+                                continue;
+                            }
+                            const FractionalNumber multiplier =
+                                old_sum_free == 0 ?
+                                FractionalNumber(1, num_free) :
+                                l->current_rate / old_sum_free;
+                            sys.equations_coefficients.push_back(std::vector<FractionalNumber>(vars.num_variables));
+                            sys.equations_coefficients.back()[vars.link_variable_index.at(l)] = 1;
+                            for (const Link* c : constrained)
+                            {
+                                sys.equations_coefficients.back()[vars.link_variable_index.at(c)] = multiplier;
+                            }
+                            sys.equations_coefficients.back()[owner_variable.first] =
+                                -1 * multiplier * owner_variable.second;
+                            sys.constants.push_back(-1 * multiplier * sum_locked);
+                        }
+                    }
+                }
+            }
+            else if (pin == nullptr)
             {
                 // A group total T has no driving constraint (a fully
                 // underdetermined group): fix it to the group's current supply
@@ -215,7 +308,11 @@ bool ApplyResults(const SolveInputs& in, const SeedResult& seed, const VariableM
         {
             sys.equations_coefficients.push_back(std::vector<FractionalNumber>(vars.num_variables));
             sys.equations_coefficients.back()[free_index] = 1;
-            if (pin == nullptr)
+            if (const auto link_it = vars.variable_of_link.find(free_index); link_it != vars.variable_of_link.end())
+            {
+                sys.constants.push_back(link_it->second->current_rate);
+            }
+            else if (pin == nullptr)
             {
                 const auto default_it = vars.group_total_default.find(free_index);
                 sys.constants.push_back(default_it != vars.group_total_default.end() ? default_it->second : FractionalNumber(0, 1));
@@ -225,7 +322,7 @@ bool ApplyResults(const SolveInputs& in, const SeedResult& seed, const VariableM
                 sys.constants.push_back(pin->current_rate);
             }
         }
-        processed_pins.insert(pin);
+        processed_variables.insert(free_index);
         reduced.reduced_matrix = ReduceMatrix(sys.equations_coefficients, sys.constants, vars.num_variables);
 
         // We added more equations than variables, the only way we have a solution
@@ -300,6 +397,17 @@ bool ApplyResults(const SolveInputs& in, const SeedResult& seed, const VariableM
             }
         }
     }
+    // A branch of a fan-out can go negative while both of its pins stay positive - the pin only
+    // sees the sum. Flag the edge itself, and mark both its ends so the user can see where.
+    for (const auto& [link, index] : vars.link_variable_index)
+    {
+        if (solution[index] < 0)
+        {
+            if (link->start != nullptr) link->start->error = true;
+            if (link->end != nullptr) link->end->error = true;
+            error_time = error_flow_duration;
+        }
+    }
     if (error_time > 0.0f)
     {
         return false;
@@ -315,6 +423,16 @@ bool ApplyResults(const SolveInputs& in, const SeedResult& seed, const VariableM
             it_end != vars.associated_variable_index.end() && l->end->current_rate == solution[it_end->second.first] * it_end->second.second)
         {
             l->flow = std::nullopt;
+        }
+    }
+
+    // Write the solved rate onto each edge that took part in this solve.
+    for (auto& l : in.links)
+    {
+        const auto it = vars.link_variable_index.find(l.get());
+        if (it != vars.link_variable_index.end())
+        {
+            l->current_rate = solution[it->second];
         }
     }
 

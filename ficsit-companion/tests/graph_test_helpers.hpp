@@ -41,7 +41,7 @@ struct IdGen {
 inline std::unique_ptr<Link> MakeLink(unsigned long long id, Pin* out_pin, Pin* in_pin)
 {
     auto link = std::make_unique<Link>(ax::NodeEditor::LinkId(id), out_pin, in_pin);
-    out_pin->link = link.get();
-    in_pin->link = link.get();
+    out_pin->links.push_back(link.get());
+    in_pin->links.push_back(link.get());
     return link;
 }

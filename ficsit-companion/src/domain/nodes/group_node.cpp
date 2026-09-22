@@ -76,8 +76,21 @@ GroupNode::GroupNode(const ax::NodeEditor::NodeId id, const std::function<unsign
         Pin* start = start_node->outs[start_pin_index].get();
         Pin* end = end_node->ins[end_pin_index].get();
         links.emplace_back(std::make_unique<Link>(local_id_generator(), start, end));
-        start->link = links.back().get();
-        end->link = links.back().get();
+        start->links.push_back(links.back().get());
+        end->links.push_back(links.back().get());
+
+        Link* created = links.back().get();
+        if (l.contains("rate"))
+        {
+            created->current_rate = FractionalNumber(
+                l["rate"]["num"].get<long long int>(),
+                l["rate"]["den"].get<long long int>());
+        }
+        else
+        {
+            // Pre-multi-link group: one link per pin, so the edge carried its end pin's rate.
+            created->current_rate = end->current_rate;
+        }
     }
 
     // Rebuild route (plug<->plug) links between vehicle stations. Plugs live
@@ -205,6 +218,10 @@ Json::Value GroupNode::Serialize() const
             { "end", {
                 { "node", get_node_index(l->end->node) },
                 { "pin", get_pin_index(l->end) }
+            }},
+            { "rate", {
+                { "num", l->current_rate.GetNumerator() },
+                { "den", l->current_rate.GetDenominator() }
             }}
         });
     }

@@ -56,14 +56,14 @@ void PropagateRates(const std::vector<std::unique_ptr<Node>>& nodes,
                 size_t connected_outs = 0;
                 for (const auto& p : node->outs)
                 {
-                    if (p->link != nullptr) connected_outs += 1;
+                    if (!p->links.empty()) connected_outs += 1;
                 }
                 if (connected_outs == 0) continue;
                 const FractionalNumber per_out = node->ins[0]->current_rate
                     / FractionalNumber(static_cast<long long>(connected_outs));
                 for (const auto& p : node->outs)
                 {
-                    if (p->link == nullptr) continue;
+                    if (p->links.empty()) continue;
                     if (p->current_rate != per_out)
                     {
                         p->current_rate = per_out;
@@ -84,14 +84,14 @@ void PropagateRates(const std::vector<std::unique_ptr<Node>>& nodes,
                 size_t connected_outs = 0;
                 for (const auto& p : node->outs)
                 {
-                    if (p->link != nullptr) connected_outs += 1;
+                    if (!p->links.empty()) connected_outs += 1;
                 }
                 if (connected_outs == 0) continue;
                 const FractionalNumber per_out = sum
                     / FractionalNumber(static_cast<long long>(connected_outs));
                 for (const auto& p : node->outs)
                 {
-                    if (p->link == nullptr) continue;
+                    if (p->links.empty()) continue;
                     if (p->current_rate != per_out)
                     {
                         p->current_rate = per_out;

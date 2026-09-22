@@ -22,13 +22,16 @@ namespace
         if (!visited.insert(&hidden_node).second) return;
         for (const auto& out : hidden_node.outs)
         {
-            if (!out || !out->link) continue;
-            const Pin* end = out->link->end;
-            if (!end || !end->node) continue;
-            if (is_hidden(*end->node))
-                CollectVisibleSinks(*end->node, is_hidden, should_bypass, visited, sinks);
-            else
-                sinks.push_back(end->id);
+            if (!out) continue;
+            for (const Link* l : out->links)
+            {
+                const Pin* end = l->end;
+                if (!end || !end->node) continue;
+                if (is_hidden(*end->node))
+                    CollectVisibleSinks(*end->node, is_hidden, should_bypass, visited, sinks);
+                else
+                    sinks.push_back(end->id);
+            }
         }
     }
 }

@@ -69,10 +69,13 @@ const Item* ResolveItemThroughChain(Pin* input_pin)
         // Otherwise, follow each outbound link and check its terminus.
         for (const auto& out_pin : n->outs)
         {
-            if (out_pin->link == nullptr || out_pin->link->end == nullptr) continue;
-            Pin* next = out_pin->link->end;
-            if (next->item != nullptr) return next->item;
-            if (next->node != nullptr) queue.push_back(next->node);
+            for (const Link* l : out_pin->links)
+            {
+                Pin* next = l->end;
+                if (next == nullptr) continue;
+                if (next->item != nullptr) return next->item;
+                if (next->node != nullptr) queue.push_back(next->node);
+            }
         }
     }
     return nullptr;
@@ -104,14 +107,18 @@ const Item* ResolveOrganizerItem(Node* origin)
         };
         for (const auto& p : n->ins)
         {
-            if (p->link == nullptr) continue;
             if (IsFuelPin(p.get())) continue; // fuel inlet is not the cargo item
-            if (const Item* it = inspect(p->link->start)) return it;
+            for (const Link* l : p->links)
+            {
+                if (const Item* it = inspect(l->start)) return it;
+            }
         }
         for (const auto& p : n->outs)
         {
-            if (p->link == nullptr) continue;
-            if (const Item* it = inspect(p->link->end)) return it;
+            for (const Link* l : p->links)
+            {
+                if (const Item* it = inspect(l->end)) return it;
+            }
         }
     }
     return nullptr;
@@ -155,8 +162,8 @@ void RecalculateOrganizerItemChain(OrganizerNode* origin)
         };
         // Don't cross the fuel inlet's link - the fuel supply chain is separate
         // from the cargo chain this flood is unifying.
-        for (const auto& p : n->ins) { if (p->link != nullptr && !IsFuelPin(p.get())) hop(p->link->start); }
-        for (const auto& p : n->outs) { if (p->link != nullptr) hop(p->link->end); }
+        for (const auto& p : n->ins) { if (!IsFuelPin(p.get())) { for (const Link* l : p->links) hop(l->start); } }
+        for (const auto& p : n->outs) { for (const Link* l : p->links) hop(l->end); }
     }
 }
 
@@ -175,22 +182,25 @@ void PropagateExtractorResourceUpstream(Node* origin, const Item* item,
         if (!n->IsOrganizer() && !n->IsLogistics()) continue;
         for (const auto& in_pin : n->ins)
         {
-            if (in_pin->link == nullptr || in_pin->link->start == nullptr) continue;
-            Node* prev = in_pin->link->start->node;
-            if (prev == nullptr) continue;
-            if (prev->IsExtractor())
+            for (const Link* l : in_pin->links)
             {
-                // Same policy as the direct-link path: only fill in a missing
-                // resource, never overwrite one the user already chose.
-                ExtractorNode* ex = static_cast<ExtractorNode*>(prev);
-                if (ex->resource == nullptr)
+                if (l->start == nullptr) continue;
+                Node* prev = l->start->node;
+                if (prev == nullptr) continue;
+                if (prev->IsExtractor())
                 {
-                    ex->ChangeResource(item, id_generator);
+                    // Same policy as the direct-link path: only fill in a missing
+                    // resource, never overwrite one the user already chose.
+                    ExtractorNode* ex = static_cast<ExtractorNode*>(prev);
+                    if (ex->resource == nullptr)
+                    {
+                        ex->ChangeResource(item, id_generator);
+                    }
                 }
-            }
-            else if (prev->IsOrganizer() || prev->IsLogistics())
-            {
-                queue.push_back(prev);
+                else if (prev->IsOrganizer() || prev->IsLogistics())
+                {
+                    queue.push_back(prev);
+                }
             }
         }
     }

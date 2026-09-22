@@ -312,3 +312,216 @@ TEST_CASE("craft output feeding a merger propagates the recipe ratio across the 
     REQUIRE(craft->outs[0]->current_rate == FractionalNumber(20, 1));
     REQUIRE(merger->ins[0]->current_rate == FractionalNumber(20, 1));
 }
+
+// ---------------------------------------------------------------------------
+// Multi-link pins (Production Planner fan-out / fan-in). A pin's rate is the sum
+// of its links' rates, so one output can feed several consumers with no splitter
+// node, and one input can be fed by several producers with no merger node.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // A 30 ore -> 20 plate producer, and a 20 plate -> 10 rod consumer. Two consumer nodes will
+    // pull from the SAME producer output pin: that is the fan-out.
+    struct FanOutFixture
+    {
+        Building building{ "Test_Constructor", FractionalNumber(0, 1), 4.0, 1.6, 2.0, false };
+        Item ore{ "Iron Ore", "", 1 };
+        Item plate{ "Iron Plate", "", 2 };
+        Item rod{ "Iron Rod", "", 3 };
+
+        std::vector<CountedItem> prod_ins{ CountedItem(&ore, FractionalNumber(30, 1)) };
+        std::vector<CountedItem> prod_outs{ CountedItem(&plate, FractionalNumber(20, 1)) };
+        Recipe producer{ prod_ins, prod_outs, &building, false, 4.0, "Recipe_IronPlate_C" };
+
+        std::vector<CountedItem> cons_ins{ CountedItem(&plate, FractionalNumber(20, 1)) };
+        std::vector<CountedItem> cons_outs{ CountedItem(&rod, FractionalNumber(10, 1)) };
+        Recipe consumer{ cons_ins, cons_outs, &building, false, 4.0, "Recipe_IronRod_C" };
+    };
+}
+
+/// @test   Fan-out: with two consumers on one output pin, pinning one consumer's demand leaves
+///         the other alone — the producer's output becomes the sum of both demands, and each
+///         link carries its own share.
+/// @covers RateSolver::Solve on a multi-link pin: the per-pin balance equation (the sum of a
+///         pin's links equals the pin's rate) together with the existing free-variable rule
+///         "keep the current value". This is the case that motivated the feature: one Iron Rod
+///         machine feeding both Screw and Rotor without a splitter in between.
+TEST_CASE("fan-out sums demand into the producer", "[rate_solver][multilink]")
+{
+    FanOutFixture fx;
+    IdGen id_gen;
+    std::vector<std::unique_ptr<Node>> nodes;
+    std::vector<std::unique_ptr<Link>> links;
+
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.producer, id_gen));
+    CraftNode* producer = static_cast<CraftNode*>(nodes.back().get());
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.consumer, id_gen));
+    CraftNode* consumer_a = static_cast<CraftNode*>(nodes.back().get());
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.consumer, id_gen));
+    CraftNode* consumer_b = static_cast<CraftNode*>(nodes.back().get());
+
+    // Both consumers hang off the SAME producer output pin.
+    links.push_back(MakeLink(id_gen(), producer->outs[0].get(), consumer_a->ins[0].get()));
+    Link* link_a = links.back().get();
+    links.push_back(MakeLink(id_gen(), producer->outs[0].get(), consumer_b->ins[0].get()));
+    Link* link_b = links.back().get();
+
+    REQUIRE(producer->outs[0]->links.size() == 2);
+
+    float error_time = 0.0f;
+
+    // Consumer A asks for 40 plate/min. B asks for nothing yet: its variable is free, so the
+    // solver holds it at 0.
+    REQUIRE(RateSolver::Solve(nodes, links, consumer_a->ins[0].get(),
+                              FractionalNumber(40, 1), error_time, 1.0f));
+    REQUIRE(producer->outs[0]->current_rate == FractionalNumber(40, 1));
+
+    // Now consumer B asks for 20 plate/min. A's variable is free and the solver holds it at 40.
+    // That is where "production ramps up" comes from, instead of "A gets squeezed".
+    REQUIRE(RateSolver::Solve(nodes, links, consumer_b->ins[0].get(),
+                              FractionalNumber(20, 1), error_time, 1.0f));
+    REQUIRE(error_time == 0.0f);
+
+    REQUIRE(consumer_a->ins[0]->current_rate == FractionalNumber(40, 1)); // not squeezed
+    REQUIRE(consumer_b->ins[0]->current_rate == FractionalNumber(20, 1));
+    REQUIRE(producer->outs[0]->current_rate == FractionalNumber(60, 1));  // 40 + 20
+    // The producer scaled with it: 60 plate needs 90 ore (the 30/20 recipe ratio).
+    REQUIRE(producer->ins[0]->current_rate == FractionalNumber(90, 1));
+
+    // Each edge carries its own share...
+    REQUIRE(link_a->current_rate == FractionalNumber(40, 1));
+    REQUIRE(link_b->current_rate == FractionalNumber(20, 1));
+    // ...and the central invariant holds: a pin's rate is the sum of its links' rates.
+    REQUIRE(link_a->current_rate + link_b->current_rate == producer->outs[0]->current_rate);
+}
+
+/// @test   Fan-in: two producers on one input pin sum into the consumer.
+/// @covers The mirror of the fan-out case — the same per-pin balance equation, this time on an
+///         input pin (an implicit merger). Proves the balance is not a special case of outputs.
+TEST_CASE("fan-in sums supply into the consumer", "[rate_solver][multilink]")
+{
+    FanOutFixture fx;
+    IdGen id_gen;
+    std::vector<std::unique_ptr<Node>> nodes;
+    std::vector<std::unique_ptr<Link>> links;
+
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.producer, id_gen));
+    CraftNode* producer_a = static_cast<CraftNode*>(nodes.back().get());
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.producer, id_gen));
+    CraftNode* producer_b = static_cast<CraftNode*>(nodes.back().get());
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.consumer, id_gen));
+    CraftNode* consumer = static_cast<CraftNode*>(nodes.back().get());
+
+    // Both producers hang off the SAME consumer input pin.
+    links.push_back(MakeLink(id_gen(), producer_a->outs[0].get(), consumer->ins[0].get()));
+    Link* link_a = links.back().get();
+    links.push_back(MakeLink(id_gen(), producer_b->outs[0].get(), consumer->ins[0].get()));
+    Link* link_b = links.back().get();
+
+    REQUIRE(consumer->ins[0]->links.size() == 2);
+
+    float error_time = 0.0f;
+    REQUIRE(RateSolver::Solve(nodes, links, producer_a->outs[0].get(),
+                              FractionalNumber(30, 1), error_time, 1.0f));
+    REQUIRE(RateSolver::Solve(nodes, links, producer_b->outs[0].get(),
+                              FractionalNumber(20, 1), error_time, 1.0f));
+    REQUIRE(error_time == 0.0f);
+
+    REQUIRE(producer_a->outs[0]->current_rate == FractionalNumber(30, 1));
+    REQUIRE(producer_b->outs[0]->current_rate == FractionalNumber(20, 1));
+    REQUIRE(consumer->ins[0]->current_rate == FractionalNumber(50, 1)); // 30 + 20
+    REQUIRE(link_a->current_rate == FractionalNumber(30, 1));
+    REQUIRE(link_b->current_rate == FractionalNumber(20, 1));
+}
+
+/// @test   Raising a fan-out pin's own rate re-splits the new total in the branches' prior
+///         ratio: a 40/20 split driven to 90 becomes 60/30, not 40/50.
+/// @covers The free-link-variable rule. Driving the shared pin leaves the branch split
+///         underdetermined; without a ratio rule the solver would hold one branch at its old
+///         value and dump the entire difference on the other, which is not a split at all.
+TEST_CASE("raising a fan-out pin keeps the branch ratio", "[rate_solver][multilink]")
+{
+    FanOutFixture fx;
+    IdGen id_gen;
+    std::vector<std::unique_ptr<Node>> nodes;
+    std::vector<std::unique_ptr<Link>> links;
+
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.producer, id_gen));
+    CraftNode* producer = static_cast<CraftNode*>(nodes.back().get());
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.consumer, id_gen));
+    CraftNode* consumer_a = static_cast<CraftNode*>(nodes.back().get());
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.consumer, id_gen));
+    CraftNode* consumer_b = static_cast<CraftNode*>(nodes.back().get());
+
+    links.push_back(MakeLink(id_gen(), producer->outs[0].get(), consumer_a->ins[0].get()));
+    Link* link_a = links.back().get();
+    links.push_back(MakeLink(id_gen(), producer->outs[0].get(), consumer_b->ins[0].get()));
+    Link* link_b = links.back().get();
+
+    float error_time = 0.0f;
+    // Establish the 40 / 20 split (total 60).
+    REQUIRE(RateSolver::Solve(nodes, links, consumer_a->ins[0].get(),
+                              FractionalNumber(40, 1), error_time, 1.0f));
+    REQUIRE(RateSolver::Solve(nodes, links, consumer_b->ins[0].get(),
+                              FractionalNumber(20, 1), error_time, 1.0f));
+    REQUIRE(producer->outs[0]->current_rate == FractionalNumber(60, 1));
+
+    // Now drive the shared output pin itself to 90/min.
+    REQUIRE(RateSolver::Solve(nodes, links, producer->outs[0].get(),
+                              FractionalNumber(90, 1), error_time, 1.0f));
+    REQUIRE(error_time == 0.0f);
+
+    REQUIRE(producer->outs[0]->current_rate == FractionalNumber(90, 1));
+    // The 2:1 ratio is preserved: 90 splits as 60 / 30.
+    REQUIRE(link_a->current_rate == FractionalNumber(60, 1));
+    REQUIRE(link_b->current_rate == FractionalNumber(30, 1));
+    REQUIRE(consumer_a->ins[0]->current_rate == FractionalNumber(60, 1));
+    REQUIRE(consumer_b->ins[0]->current_rate == FractionalNumber(30, 1));
+}
+
+/// @test   A locked branch of a fan-out keeps its rate: it is excluded from the re-split, and the
+///         other branches share whatever the shared pin's new total leaves over.
+/// @covers How the lock interacts with a fan-out re-split. A locked branch folds into the
+///         equation's constant, exactly as a locked pin does on a CustomSplitter. This is also
+///         the guarantee that locking one consumer pins it while you tune the rest.
+TEST_CASE("a locked branch keeps its rate under fan-out", "[rate_solver][multilink]")
+{
+    FanOutFixture fx;
+    IdGen id_gen;
+    std::vector<std::unique_ptr<Node>> nodes;
+    std::vector<std::unique_ptr<Link>> links;
+
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.producer, id_gen));
+    CraftNode* producer = static_cast<CraftNode*>(nodes.back().get());
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.consumer, id_gen));
+    CraftNode* consumer_a = static_cast<CraftNode*>(nodes.back().get());
+    nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.consumer, id_gen));
+    CraftNode* consumer_b = static_cast<CraftNode*>(nodes.back().get());
+
+    links.push_back(MakeLink(id_gen(), producer->outs[0].get(), consumer_a->ins[0].get()));
+    Link* link_a = links.back().get();
+    links.push_back(MakeLink(id_gen(), producer->outs[0].get(), consumer_b->ins[0].get()));
+    Link* link_b = links.back().get();
+
+    float error_time = 0.0f;
+    REQUIRE(RateSolver::Solve(nodes, links, consumer_a->ins[0].get(),
+                              FractionalNumber(40, 1), error_time, 1.0f));
+    REQUIRE(RateSolver::Solve(nodes, links, consumer_b->ins[0].get(),
+                              FractionalNumber(20, 1), error_time, 1.0f));
+    REQUIRE(producer->outs[0]->current_rate == FractionalNumber(60, 1));
+
+    // Pin branch A at 40. The lock stops at the fanning pin, so the producer and branch B stay
+    // free - that is what makes this scenario expressible at all.
+    consumer_a->ins[0]->SetLocked(true);
+    REQUIRE_FALSE(producer->outs[0]->GetLocked());
+    REQUIRE_FALSE(consumer_b->ins[0]->GetLocked());
+
+    REQUIRE(RateSolver::Solve(nodes, links, producer->outs[0].get(),
+                              FractionalNumber(90, 1), error_time, 1.0f));
+    REQUIRE(error_time == 0.0f);
+
+    REQUIRE(link_a->current_rate == FractionalNumber(40, 1)); // locked, untouched
+    REQUIRE(link_b->current_rate == FractionalNumber(50, 1)); // takes the whole remainder
+    REQUIRE(producer->outs[0]->current_rate == FractionalNumber(90, 1));
+}

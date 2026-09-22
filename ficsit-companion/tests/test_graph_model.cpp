@@ -1,11 +1,13 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "domain/gamedata/building.hpp"
 #include "domain/graph/graph_model.hpp"
 #include "graph_test_helpers.hpp"
 #include "domain/graph/link.hpp"
 #include "domain/nodes/node.hpp"
 #include "domain/graph/pin.hpp"
 #include "domain/gamedata/recipe.hpp" // Item
+#include "domain/solver/rate_solver.hpp"
 #include "domain/vehicle/vehicle_route.hpp"
 
 #include <stdexcept>
@@ -129,8 +131,8 @@ TEST_CASE("GraphModel::CreateLink restore mode normalizes direction without solv
     REQUIRE(g.links.size() == 1);
     REQUIRE(g.links[0]->start == source_out);
     REQUIRE(g.links[0]->end == sink_in);
-    REQUIRE(source_out->link == g.links[0].get());
-    REQUIRE(sink_in->link == g.links[0].get());
+    REQUIRE(source_out->SoleLink() == g.links[0].get());
+    REQUIRE(sink_in->SoleLink() == g.links[0].get());
     REQUIRE(source_out->current_rate == FractionalNumber(60, 1));
     REQUIRE(sink_in->current_rate == FractionalNumber(10, 1));
     REQUIRE(source_out->GetLocked());
@@ -162,8 +164,8 @@ TEST_CASE("GraphModel::CreateLink removes a rejected ordinary link", "[graph_mod
     g.CreateLink(source_out, sink_in, true, error_time, 2.0f);
 
     REQUIRE(g.links.empty());
-    REQUIRE(source_out->link == nullptr);
-    REQUIRE(sink_in->link == nullptr);
+    REQUIRE(source_out->links.empty());
+    REQUIRE(sink_in->links.empty());
     REQUIRE(fake.deleted_links.size() == 1);
     REQUIRE(error_time == 2.0f);
     REQUIRE(locked_input->current_rate == FractionalNumber(100, 1));
@@ -189,8 +191,8 @@ TEST_CASE("GraphModel::CreateLink cleans up after a propagation exception", "[gr
     g.CreateLink(source_out, sink_in, true, error_time, 2.5f);
 
     REQUIRE(g.links.empty());
-    REQUIRE(source_out->link == nullptr);
-    REQUIRE(sink_in->link == nullptr);
+    REQUIRE(source_out->links.empty());
+    REQUIRE(sink_in->links.empty());
     REQUIRE(fake.deleted_links.size() == 1);
     REQUIRE(error_time == 2.5f);
 }
@@ -224,7 +226,7 @@ TEST_CASE("GraphModel::DeleteNode removes node and its incident links", "[graph_
 
     REQUIRE(g.nodes.size() == 1);
     REQUIRE(g.links.empty());
-    REQUIRE(target_in->link == nullptr);
+    REQUIRE(target_in->links.empty());
     REQUIRE(fake.deleted_nodes.size() == 1);
     REQUIRE(fake.deleted_nodes[0] == source_id);
     REQUIRE(fake.deleted_links.size() == 1);
@@ -488,10 +490,10 @@ TEST_CASE("GraphModel::DeleteLink clears endpoint-specific state", "[graph_model
 
         g.DeleteLink(ax::NodeEditor::LinkId(701));
 
-        REQUIRE(source_out->link == nullptr);
+        REQUIRE(source_out->links.empty());
         REQUIRE(source_out->item == nullptr);
         REQUIRE(source_out->current_rate == FractionalNumber(0, 1));
-        REQUIRE(sink_in->link == nullptr);
+        REQUIRE(sink_in->links.empty());
         REQUIRE(sink_in->item == nullptr);
         REQUIRE(sink_in->current_rate == FractionalNumber(0, 1));
         REQUIRE(g.links.empty());
@@ -518,8 +520,8 @@ TEST_CASE("GraphModel::DeleteLink clears endpoint-specific state", "[graph_model
 
         REQUIRE(splitter_raw->item == nullptr);
         REQUIRE(merger_raw->item == nullptr);
-        REQUIRE(source_out->link == nullptr);
-        REQUIRE(merger_in->link == nullptr);
+        REQUIRE(source_out->links.empty());
+        REQUIRE(merger_in->links.empty());
     }
 
     SECTION("logistics destination clears its input")
@@ -541,7 +543,7 @@ TEST_CASE("GraphModel::DeleteLink clears endpoint-specific state", "[graph_model
 
         g.DeleteLink(ax::NodeEditor::LinkId(703));
 
-        REQUIRE(storage_in->link == nullptr);
+        REQUIRE(storage_in->links.empty());
         REQUIRE(storage_in->item == nullptr);
         REQUIRE(storage_in->current_rate == FractionalNumber(0, 1));
     }
@@ -592,8 +594,8 @@ TEST_CASE("GraphModel::DeleteNode removes incoming and outgoing links", "[graph_
 
     REQUIRE(g.nodes.size() == 2);
     REQUIRE(g.links.empty());
-    REQUIRE(source_out->link == nullptr);
-    REQUIRE(sink_in->link == nullptr);
+    REQUIRE(source_out->links.empty());
+    REQUIRE(sink_in->links.empty());
     REQUIRE(fake.deleted_nodes == std::vector<ax::NodeEditor::NodeId>{storage_id});
     REQUIRE(fake.deleted_links == std::vector<ax::NodeEditor::LinkId>{
         ax::NodeEditor::LinkId(801), ax::NodeEditor::LinkId(802)});
@@ -622,4 +624,77 @@ TEST_CASE("GraphModel::DeleteNode removes every vehicle route link", "[graph_mod
     REQUIRE(fake.deleted_nodes == std::vector<ax::NodeEditor::NodeId>{loader_id});
     REQUIRE(fake.deleted_links == std::vector<ax::NodeEditor::LinkId>{
         first_link_id, second_link_id});
+}
+
+// ---------------------------------------------------------------------------
+// Multi-link pins: wiring a second consumer onto an output pin that already has
+// one. Which end drives the solve is what decides whether production ramps up or
+// the new consumer gets squeezed.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // A 30 ore -> 20 plate producer, and a 20 plate -> 10 rod consumer.
+    struct FanOutRecipes
+    {
+        Building building{ "Test_Constructor", FractionalNumber(0, 1), 4.0, 1.6, 2.0, false };
+        Item ore{ "Iron Ore", "", 1 };
+        Item plate{ "Iron Plate", "", 2 };
+        Item rod{ "Iron Rod", "", 3 };
+
+        std::vector<CountedItem> prod_ins{ CountedItem(&ore, FractionalNumber(30, 1)) };
+        std::vector<CountedItem> prod_outs{ CountedItem(&plate, FractionalNumber(20, 1)) };
+        Recipe producer{ prod_ins, prod_outs, &building, false, 4.0, "Recipe_IronPlate_C" };
+
+        std::vector<CountedItem> cons_ins{ CountedItem(&plate, FractionalNumber(20, 1)) };
+        std::vector<CountedItem> cons_outs{ CountedItem(&rod, FractionalNumber(10, 1)) };
+        Recipe consumer{ cons_ins, cons_outs, &building, false, 4.0, "Recipe_IronRod_C" };
+    };
+}
+
+/// @test   Wiring a new consumer onto an output pin that already has a link makes production ramp
+///         up to the summed demand: the new consumer keeps the rate it was configured with, and
+///         the consumer that was already there is not squeezed.
+/// @covers The constraint-pin choice in GraphModel::CreateLink. This is the step that turns the
+///         multi-link solver into the behaviour the user sees. CreateLink normally pushes from
+///         the source; doing that here would drag the new consumer to whatever rate the source
+///         already carried (40), instead of letting it keep its own demand (20) and raising the
+///         producer to 60.
+TEST_CASE("CreateLink on a fan-out pulls from the newly wired end", "[graph_model][multilink]")
+{
+    FanOutRecipes fx;
+    FakeEditorBackend fake;
+    GraphModel g(fake);
+    auto id_gen = [&g] { return g.GetNextId(); };
+
+    g.nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.producer, id_gen));
+    CraftNode* producer = static_cast<CraftNode*>(g.nodes.back().get());
+    g.nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.consumer, id_gen));
+    CraftNode* screw = static_cast<CraftNode*>(g.nodes.back().get());
+    g.nodes.push_back(std::make_unique<CraftNode>(ax::NodeEditor::NodeId(id_gen()), &fx.consumer, id_gen));
+    CraftNode* rotor = static_cast<CraftNode*>(g.nodes.back().get());
+
+    float error_time = 0.0f;
+
+    // Established: the producer feeds the screw at 40/min.
+    g.CreateLink(producer->outs[0].get(), screw->ins[0].get(), true, error_time, 1.0f);
+    REQUIRE(RateSolver::Solve(g.nodes, g.links, screw->ins[0].get(),
+                              FractionalNumber(40, 1), error_time, 1.0f));
+    REQUIRE(producer->outs[0]->current_rate == FractionalNumber(40, 1));
+
+    // The rotor already demands 20/min before being wired up.
+    REQUIRE(RateSolver::Solve(g.nodes, g.links, rotor->ins[0].get(),
+                              FractionalNumber(20, 1), error_time, 1.0f));
+    REQUIRE(rotor->ins[0]->current_rate == FractionalNumber(20, 1));
+
+    // Second link on the SAME output pin.
+    g.CreateLink(producer->outs[0].get(), rotor->ins[0].get(), true, error_time, 1.0f);
+
+    REQUIRE(error_time == 0.0f);
+    REQUIRE(g.links.size() == 2); // the link survived; a rejected solve would have deleted it
+    REQUIRE(producer->outs[0]->links.size() == 2);
+    REQUIRE(producer->outs[0]->current_rate == FractionalNumber(60, 1)); // ramped up: 40 + 20
+    REQUIRE(screw->ins[0]->current_rate == FractionalNumber(40, 1));     // not squeezed
+    REQUIRE(rotor->ins[0]->current_rate == FractionalNumber(20, 1));     // kept its demand
+    REQUIRE(producer->ins[0]->current_rate == FractionalNumber(90, 1));  // 60 plate needs 90 ore
 }

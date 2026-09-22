@@ -11,7 +11,8 @@ Link::Link(const ax::NodeEditor::LinkId id, Pin* start, Pin* end) :
     end(end),
     // We check for nullptr because derferencing a nullptr is nasty and the assert will catch it with a better error message
     start_id(start == nullptr ? ax::NodeEditor::PinId::Invalid : start->id),
-    end_id(end == nullptr ? ax::NodeEditor::PinId::Invalid : end->id)
+    end_id(end == nullptr ? ax::NodeEditor::PinId::Invalid : end->id),
+    current_rate(0, 1)
 {
     assert(start != nullptr && "start shouldn't be null in Link constructor");
     assert(end != nullptr && "end shouldn't be null in Link constructor");

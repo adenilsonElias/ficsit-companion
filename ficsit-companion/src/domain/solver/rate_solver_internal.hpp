@@ -33,6 +33,9 @@ namespace rate_solver_detail
     struct SeedResult
     {
         std::unordered_set<const Pin*> relevant_pins;
+        // Every link incident to a relevant pin. Each one gets its own variable, so a pin with
+        // fan-out can split its rate across branches instead of forcing them all equal.
+        std::unordered_set<const Link*> relevant_links;
         std::unordered_set<const Pin*> multi_pin_constrained;
         std::vector<ActiveGroup> active_groups;
     };
@@ -40,6 +43,13 @@ namespace rate_solver_detail
     struct VariableMapping
     {
         std::unordered_map<const Pin*, std::pair<std::size_t, FractionalNumber>> associated_variable_index;
+        // One variable per relevant link: the rate on that edge. On a single-link pin the pin
+        // balance equation ties it to the pin's own rate and the system collapses to what it was
+        // before; on a pin with fan-out it is the degree of freedom that splits the branches.
+        std::unordered_map<const Link*, std::size_t> link_variable_index;
+        // The inverse. A link variable has no pin, so reversed_variable_map is null at its index
+        // (same as a route total T); this is how ApplyResults tells the two apart.
+        std::unordered_map<std::size_t, const Link*> variable_of_link;
         std::size_t num_variables = 0;
         std::vector<std::size_t> group_total_index;
         std::unordered_map<std::size_t, FractionalNumber> group_total_default;

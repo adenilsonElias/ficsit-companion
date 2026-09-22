@@ -200,8 +200,8 @@ TEST_CASE("GroupNode round-trips vehicle route links", "[group][vehicle_route]")
     REQUIRE(rebuilt_loader->route_links[0] == rebuilt_unloader->route_links[0]);
     REQUIRE(rebuilt_loader->route_links[0]->start == rebuilt_loader->plug.get());
     REQUIRE(rebuilt_loader->route_links[0]->end == rebuilt_unloader->plug.get());
-    REQUIRE(rebuilt_loader->plug->link == nullptr);
-    REQUIRE(rebuilt_unloader->plug->link == nullptr);
+    REQUIRE(rebuilt_loader->plug->links.empty());
+    REQUIRE(rebuilt_unloader->plug->links.empty());
 }
 
 /// @test   An ExtractorNode (MinerMk2, Pure purity, extracting an item) round-trips to identical JSON.

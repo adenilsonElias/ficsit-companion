@@ -118,6 +118,16 @@ namespace rate_solver_detail
             create_variable(pin);
         }
 
+        // One variable per relevant link, after every pin variable so the existing pivot
+        // ordering is untouched. These map to no pin: reversed_variable_map stays null at their
+        // index, exactly like the route totals allocated below.
+        for (const Link* l : seed.relevant_links)
+        {
+            vars.link_variable_index[l] = vars.num_variables;
+            vars.variable_of_link[vars.num_variables] = l;
+            vars.num_variables += 1;
+        }
+
         // Allocate one auxiliary "total" variable T per active route group, after
         // every pin variable (so existing pivot ordering is untouched). T maps to no
         // pin: it is skipped by the negative-rate check and rate-assignment loops,

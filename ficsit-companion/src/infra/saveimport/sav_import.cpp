@@ -379,9 +379,9 @@ namespace SavImport
                 for (const auto& p : node->outs)
                 {
                     if (IsExtractableResource(p->item)) return p->item;
-                    if (p->link != nullptr && p->link->end != nullptr)
+                    if (!p->links.empty() && p->SoleLink()->end != nullptr)
                     {
-                        queue.push_back(p->link->end);
+                        queue.push_back(p->SoleLink()->end);
                     }
                 }
             }
@@ -393,7 +393,7 @@ namespace SavImport
         {
             for (const auto& node : nodes)
             {
-                if (!node->IsExtractor() || node->outs.empty() || node->outs[0]->link == nullptr)
+                if (!node->IsExtractor() || node->outs.empty() || node->outs[0]->links.empty())
                 {
                     continue;
                 }
@@ -402,7 +402,7 @@ namespace SavImport
                 {
                     continue;
                 }
-                const Item* item = ResolveExtractorResourceDownstream(node->outs[0]->link->end);
+                const Item* item = ResolveExtractorResourceDownstream(node->outs[0]->SoleLink()->end);
                 if (item != nullptr)
                 {
                     extractor->ChangeResource(item, id_generator);
@@ -418,7 +418,7 @@ namespace SavImport
             auto& pins = is_output ? node->outs : node->ins;
             for (auto& p : pins)
             {
-                if (p->item == item && p->link == nullptr)
+                if (p->item == item && p->links.empty())
                 {
                     return p.get();
                 }
@@ -1283,7 +1283,7 @@ namespace SavImport
                 {
                     for (size_t i = 0; i < src_node->outs.size(); ++i)
                     {
-                        if (src_node->outs[i]->item == belt_item[bi] && src_node->outs[i]->link == nullptr)
+                        if (src_node->outs[i]->item == belt_item[bi] && src_node->outs[i]->links.empty())
                         {
                             src_pin = static_cast<int>(i);
                             break;
@@ -1294,7 +1294,7 @@ namespace SavImport
                 {
                     for (size_t i = 0; i < dst_node->ins.size(); ++i)
                     {
-                        if (dst_node->ins[i]->item == belt_item[bi] && dst_node->ins[i]->link == nullptr)
+                        if (dst_node->ins[i]->item == belt_item[bi] && dst_node->ins[i]->links.empty())
                         {
                             dst_pin = static_cast<int>(i);
                             break;
@@ -1339,15 +1339,15 @@ namespace SavImport
             }
 
             // Skip duplicate connections (a pin can hold at most one link).
-            if (out_pin->link != nullptr || in_pin->link != nullptr)
+            if (!out_pin->links.empty() || !in_pin->links.empty())
             {
                 collisions += 1;
                 continue;
             }
 
             out.links.emplace_back(std::make_unique<Link>(id_generator(), out_pin, in_pin));
-            out_pin->link = out.links.back().get();
-            in_pin->link = out.links.back().get();
+            out_pin->links.push_back(out.links.back().get());
+            in_pin->links.push_back(out.links.back().get());
             connected += 1;
         }
 
@@ -1370,10 +1370,10 @@ namespace SavImport
             for (const auto& pin : node->ins)
             {
                 if (IsStationFuelPin(node, pin.get())) continue;
-                if (pin->link != nullptr && pin->link->start != nullptr
-                    && pin->link->start->item != nullptr)
+                if (!pin->links.empty() && pin->SoleLink()->start != nullptr
+                    && pin->SoleLink()->start->item != nullptr)
                 {
-                    cargo_items.insert(pin->link->start->item->name);
+                    cargo_items.insert(pin->SoleLink()->start->item->name);
                 }
             }
 
@@ -1450,11 +1450,11 @@ namespace SavImport
             if (!node->IsCraft()) continue;
             for (const auto& in_pin : node->ins)
             {
-                if (in_pin->item == nullptr || in_pin->link == nullptr) continue;
+                if (in_pin->item == nullptr || in_pin->links.empty()) continue;
                 const Item* ingredient = in_pin->item;
                 std::vector<Pin*> stack;
                 std::unordered_set<Pin*> seen;
-                stack.push_back(in_pin->link->start);
+                stack.push_back(in_pin->SoleLink()->start);
                 while (!stack.empty())
                 {
                     Pin* p = stack.back();
@@ -1487,9 +1487,9 @@ namespace SavImport
                     // Continue upstream through this node's (cargo) inputs.
                     for (auto& q : pn->ins)
                     {
-                        if (q->link != nullptr && !IsStationFuelPin(pn, q.get()))
+                        if (!q->links.empty() && !IsStationFuelPin(pn, q.get()))
                         {
-                            stack.push_back(q->link->start);
+                            stack.push_back(q->SoleLink()->start);
                         }
                     }
                 }
@@ -1509,8 +1509,8 @@ namespace SavImport
         std::unordered_map<Node*, bool> buffer_produced;
         auto make_pipe_link = [&](Pin* start, Pin* end) {
             out.links.emplace_back(std::make_unique<Link>(id_generator(), start, end));
-            start->link = out.links.back().get();
-            end->link = out.links.back().get();
+            start->links.push_back(out.links.back().get());
+            end->links.push_back(out.links.back().get());
         };
 
         for (const PipeNetwork& net : parsed.pipe_networks)
@@ -1544,7 +1544,7 @@ namespace SavImport
                     {
                         for (auto& p : node->ins)
                         {
-                            if (p->link == nullptr)
+                            if (p->links.empty())
                             {
                                 p->item = fluid;
                                 consumers.push_back(p.get());
@@ -1557,7 +1557,7 @@ namespace SavImport
                     {
                         for (auto& p : node->outs)
                         {
-                            if (p->link == nullptr)
+                            if (p->links.empty())
                             {
                                 p->item = fluid;
                                 producers.push_back(p.get());
@@ -1570,7 +1570,7 @@ namespace SavImport
                 }
 
                 if (node->IsExtractor() && !node->outs.empty()
-                    && node->outs[0]->item == fluid && node->outs[0]->link == nullptr)
+                    && node->outs[0]->item == fluid && node->outs[0]->links.empty())
                 {
                     producers.push_back(node->outs[0].get());
                     continue;
@@ -1585,11 +1585,11 @@ namespace SavImport
                     consumers.push_back(ip);
                     continue;
                 }
-                if (ep.dir == "out" && !node->outs.empty() && node->outs[0]->link == nullptr)
+                if (ep.dir == "out" && !node->outs.empty() && node->outs[0]->links.empty())
                 {
                     producers.push_back(node->outs[0].get());
                 }
-                else if (ep.dir == "in" && !node->ins.empty() && node->ins[0]->link == nullptr)
+                else if (ep.dir == "in" && !node->ins.empty() && node->ins[0]->links.empty())
                 {
                     consumers.push_back(node->ins[0].get());
                 }
@@ -1764,8 +1764,8 @@ namespace SavImport
                     FractionalNumber total(0, 1);
                     for (const auto& p : node->outs)
                     {
-                        if (p->link == nullptr || p->link->end == nullptr) continue;
-                        const FractionalNumber demand = p->link->end->current_rate;
+                        if (p->links.empty() || p->SoleLink()->end == nullptr) continue;
+                        const FractionalNumber demand = p->SoleLink()->end->current_rate;
                         if (p->current_rate != demand) { p->current_rate = demand; changed = true; }
                         total = total + demand;
                     }
@@ -1783,22 +1783,22 @@ namespace SavImport
                         FractionalNumber total_supply(0, 1);
                         for (const auto& p : node->ins)
                         {
-                            if (p->link == nullptr || p->link->start == nullptr) continue;
-                            const FractionalNumber supply = p->link->start->current_rate;
+                            if (p->links.empty() || p->SoleLink()->start == nullptr) continue;
+                            const FractionalNumber supply = p->SoleLink()->start->current_rate;
                             if (p->current_rate != supply) { p->current_rate = supply; changed = true; }
                             total_supply = total_supply + supply;
                         }
                         size_t connected_outs = 0;
                         for (const auto& p : node->outs)
                         {
-                            if (p->link != nullptr) connected_outs += 1;
+                            if (!p->links.empty()) connected_outs += 1;
                         }
                         if (connected_outs == 0) continue;
                         const FractionalNumber per_out = total_supply
                             / FractionalNumber(static_cast<long long>(connected_outs));
                         for (const auto& p : node->outs)
                         {
-                            if (p->link == nullptr) continue;
+                            if (p->links.empty()) continue;
                             if (p->current_rate != per_out) { p->current_rate = per_out; changed = true; }
                         }
                         continue;
@@ -1808,8 +1808,8 @@ namespace SavImport
                     size_t connected_outs = 0;
                     for (const auto& p : node->outs)
                     {
-                        if (p->link == nullptr || p->link->end == nullptr) continue;
-                        const FractionalNumber demand = p->link->end->current_rate;
+                        if (p->links.empty() || p->SoleLink()->end == nullptr) continue;
+                        const FractionalNumber demand = p->SoleLink()->end->current_rate;
                         if (p->current_rate != demand) { p->current_rate = demand; changed = true; }
                         total = total + demand;
                         connected_outs += 1;
@@ -1818,14 +1818,14 @@ namespace SavImport
                     size_t connected_ins = 0;
                     for (const auto& p : node->ins)
                     {
-                        if (p->link != nullptr && !IsStationFuelPin(node.get(), p.get())) connected_ins += 1;
+                        if (!p->links.empty() && !IsStationFuelPin(node.get(), p.get())) connected_ins += 1;
                     }
                     if (connected_ins == 0) continue;
                     const FractionalNumber per_in = total
                         / FractionalNumber(static_cast<long long>(connected_ins));
                     for (const auto& p : node->ins)
                     {
-                        if (p->link == nullptr || IsStationFuelPin(node.get(), p.get())) continue;
+                        if (p->links.empty() || IsStationFuelPin(node.get(), p.get())) continue;
                         if (p->current_rate != per_in) { p->current_rate = per_in; changed = true; }
                     }
                 }

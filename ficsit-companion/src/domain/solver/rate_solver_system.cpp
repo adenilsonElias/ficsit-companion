@@ -15,8 +15,6 @@ namespace rate_solver_detail
         LinearSystem sys;
         // Now we can create the main equations linked to this graph operation
         // The end goal is to solve sys.equations_coefficients * x = sys.constants
-        // Used to prevent double processing the same link (it would work with duplicated equations but more efficient to avoid creating them in the first place)
-        std::unordered_set<const Link*> processed_links;
         // used to prevent double processing the same Merger/CustomSplitter node
         std::unordered_set<const Node*> processed_multi_node;
 
@@ -30,21 +28,28 @@ namespace rate_solver_detail
             sys.constants.push_back(in.constraint_value);
         }
 
-        // Then process all pins to add an equality equation per link and a balance equation for all merger/customsplitter
+        // Then process all pins to add a balance equation per pin and a balance equation for all merger/customsplitter
         for (const Pin* pin : seed.relevant_pins)
         {
-            if (pin->link != nullptr && processed_links.find(pin->link) == processed_links.end())
+            // Pin balance: the rates on a pin's links sum to the pin's own rate.
+            //   sum(link_vars of pin) - coef(pin) * var(pin) = 0
+            // With a single link this says link == pin, and the same equation on the far end says
+            // link == that pin too, so together they reproduce the old start == end equality.
+            // With several links it is the fan-out split, which the old formulation could not
+            // express: it would have forced every branch to the same rate.
+            if (!pin->links.empty())
             {
-                // Add an equation for equality
-                // X - Y = 0
                 std::vector<FractionalNumber> equation(vars.num_variables);
-                const std::pair<size_t, FractionalNumber>& start_variable = vars.associated_variable_index.at(pin->link->start);
-                const std::pair<size_t, FractionalNumber>& end_variable = vars.associated_variable_index.at(pin->link->end);
-                equation[start_variable.first] = start_variable.second;
-                equation[end_variable.first] = -1 * end_variable.second;
+                for (const Link* link : pin->links)
+                {
+                    // += , not = : several pins of a craft node share one variable, and a plain
+                    // assignment would clobber a sibling pin's contribution.
+                    equation[vars.link_variable_index.at(link)] += 1;
+                }
+                const std::pair<size_t, FractionalNumber>& pin_variable = vars.associated_variable_index.at(pin);
+                equation[pin_variable.first] -= pin_variable.second;
                 sys.equations_coefficients.push_back(equation);
                 sys.constants.push_back(0);
-                processed_links.insert(pin->link);
             }
 
             if ((pin->node->GetKind() == Node::Kind::Merger || pin->node->GetKind() == Node::Kind::CustomSplitter) && processed_multi_node.find(pin->node) == processed_multi_node.end())

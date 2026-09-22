@@ -5,7 +5,7 @@
 
 Pin::Pin(const ax::NodeEditor::PinId id, const ax::NodeEditor::PinKind direction,
     Node* node, const Item* item, const bool locked, const FractionalNumber& base_rate) :
-    id(id), direction(direction), node(node), link(nullptr), item(item), base_rate(base_rate), current_rate(0, 1), error(false), locked(locked)
+    id(id), direction(direction), node(node), item(item), base_rate(base_rate), current_rate(0, 1), error(false), locked(locked)
 {
 
 }
@@ -23,10 +23,14 @@ void Pin::SetLocked(const bool b)
     }
 
     locked = b;
-    if (link != nullptr)
+    // The lock only crosses an edge that is the sole link on BOTH sides: only then do the two
+    // ends necessarily carry the same rate, so fixing one fixes the other. Under fan-out the
+    // lock fixes the pin's total, not how that total divides between the branches - so it stops
+    // at the fanning pin and the branches stay free.
+    if (Link* sole = SoleLink(); sole != nullptr)
     {
-        Pin* linked_pin = direction == ax::NodeEditor::PinKind::Input ? link->start : link->end;
-        if (linked_pin->locked != b)
+        Pin* linked_pin = direction == ax::NodeEditor::PinKind::Input ? sole->start : sole->end;
+        if (linked_pin->SoleLink() == sole && linked_pin->locked != b)
         {
             linked_pin->SetLocked(b);
         }

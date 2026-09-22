@@ -355,13 +355,15 @@ void ProductionApp::GroupSelectedNodes()
     {
         if (ax::NodeEditor::IsNodeSelected((*it)->id))
         {
+            // Copy first: process_link erases from the graph's link list and from the pins'
+            // link vectors, so a pin with fan-out would invalidate the iterator mid-loop.
             for (const auto& p : (*it)->ins)
             {
-                process_link(p->link);
+                for (Link* l : std::vector<Link*>(p->links)) process_link(l);
             }
             for (const auto& p : (*it)->outs)
             {
-                process_link(p->link);
+                for (Link* l : std::vector<Link*>(p->links)) process_link(l);
             }
             ax::NodeEditor::DeleteNode((*it)->id);
             selected_nodes.emplace_back(std::move(*it));
@@ -549,10 +551,10 @@ void ProductionApp::UngroupSelectedNode()
     {
         if (mapped < 0 || mapped >= static_cast<int>(nodes.size())) continue;
         Node* n = nodes[mapped].get();
-        if (!n->IsExtractor() || n->outs.empty() || n->outs[0]->link == nullptr) continue;
+        if (!n->IsExtractor() || n->outs.empty() || n->outs[0]->links.empty()) continue;
         ExtractorNode* ex = static_cast<ExtractorNode*>(n);
         if (ex->resource != nullptr) continue;
-        if (const Item* it = ResolveItemThroughChain(n->outs[0]->link->end);
+        if (const Item* it = ResolveItemThroughChain(n->outs[0]->links[0]->end);
             it != nullptr)
         {
             ex->ChangeResource(it, std::bind(&ProductionApp::GetNextId, this));
@@ -1713,8 +1715,8 @@ void ProductionApp::RenderNodes()
         std::sort(sorted_pin_indices.begin(), sorted_pin_indices.begin() + N, [&](const size_t i1, const size_t i2) {
             const std::unique_ptr<Pin>& p1 = pins[i1];
             const std::unique_ptr<Pin>& p2 = pins[i2];
-            const Link* l1 = p1->link;
-            const Link* l2 = p2->link;
+            const Link* l1 = p1->SoleLink();
+            const Link* l2 = p2->SoleLink();
 
             const bool p1_is_above = l1 != nullptr && (p1->direction == ax::NodeEditor::PinKind::Input ? l1->start : l1->end)->node->pos.y < p1->node->pos.y;
             const bool p2_is_above = l2 != nullptr && (p2->direction == ax::NodeEditor::PinKind::Input ? l2->start : l2->end)->node->pos.y < p2->node->pos.y;
@@ -1907,7 +1909,7 @@ void ProductionApp::RenderNodes()
                                 const ImColor pin_outline = IsFuelPin(p.get())
                                     ? ImColor(255, 170, 0)
                                     : ImColor(1.0f, 1.0f, 1.0f);
-                                if (p->link == nullptr)
+                                if (p->links.empty())
                                 {
                                     draw_list->AddCircle(center, radius, pin_outline);
                                 }
@@ -2054,9 +2056,9 @@ void ProductionApp::RenderNodes()
                         if (removed_input_idx.has_value())
                         {
                             const int idx = removed_input_idx.value();
-                            if (node->ins[sorted_pin_indices[idx]]->link != nullptr)
+                            for (const Link* l : std::vector<Link*>(node->ins[sorted_pin_indices[idx]]->links))
                             {
-                                DeleteLink(node->ins[sorted_pin_indices[idx]]->link->id);
+                                DeleteLink(l->id);
                             }
                             node->ins.erase(node->ins.begin() + sorted_pin_indices[idx]);
                             if (node->IsMerger()) // Sink doesn't have any output to update, nor lock pins to update
@@ -2242,7 +2244,7 @@ void ProductionApp::RenderNodes()
                                     cursor_pos.x + radius,
                                     cursor_pos.y + radius
                                 );
-                                if (p->link == nullptr)
+                                if (p->links.empty())
                                 {
                                     draw_list->AddCircle(center, radius, ImColor(1.0f, 1.0f, 1.0f));
                                 }
@@ -2311,9 +2313,9 @@ void ProductionApp::RenderNodes()
                         if (removed_output_idx.has_value())
                         {
                             const int idx = removed_output_idx.value();
-                            if (node->outs[sorted_pin_indices[idx]]->link != nullptr)
+                            for (const Link* l : std::vector<Link*>(node->outs[sorted_pin_indices[idx]]->links))
                             {
-                                DeleteLink(node->outs[sorted_pin_indices[idx]]->link->id);
+                                DeleteLink(l->id);
                             }
                             node->outs.erase(node->outs.begin() + sorted_pin_indices[idx]);
                             if (node->IsCustomSplitter())
@@ -2740,10 +2742,22 @@ void ProductionApp::RenderNodes()
 
 void ProductionApp::RenderLinks()
 {
+    // A pin is consistent when the rates on its links add up to its own rate. On a pin with one
+    // link that is the old "both ends must match" check; on a pin that fans out it is the only
+    // check that means anything, because the two ends of a branch legitimately differ.
+    auto pin_balanced = [](const Pin* p) {
+        FractionalNumber sum(0, 1);
+        for (const Link* l : p->links)
+        {
+            sum += l->current_rate;
+        }
+        return sum == p->current_rate;
+    };
+
     for (const auto& link : links)
     {
         ImColor link_color;
-        if (link->start->current_rate != link->end->current_rate)
+        if (!pin_balanced(link->start) || !pin_balanced(link->end))
         {
             link_color = ImColor(1.0f, 0.0f, 0.0f); // Red
         }
@@ -2767,21 +2781,27 @@ void ProductionApp::RenderLinks()
         }
     }
 
-    if (settings.show_debug_ids)
+    // Show the rate carried by the belt under the cursor. On a plain belt this just repeats what
+    // the two pins already say, but on a fan-out feeding a fan-in neither pin reveals the split -
+    // each only shows a total - and the edge is the one place the number exists.
+    const ax::NodeEditor::LinkId hovered_link = ax::NodeEditor::GetHoveredLink();
+    if (hovered_link)
     {
-        const ax::NodeEditor::LinkId hovered_link = ax::NodeEditor::GetHoveredLink();
-        if (hovered_link)
+        for (const auto& link : links)
         {
-            for (const auto& link : links)
+            if (link->id != hovered_link)
             {
-                if (link->id == hovered_link)
-                {
-                    frame_tooltips.push_back("link:" + std::to_string(link->id.Get()) +
-                        "\nfrom pin:" + std::to_string(link->start_id.Get()) +
-                        "\nto pin:" + std::to_string(link->end_id.Get()));
-                    break;
-                }
+                continue;
             }
+            std::string tooltip = link->current_rate.GetStringFloat() + "/min";
+            if (settings.show_debug_ids)
+            {
+                tooltip += "\nlink:" + std::to_string(link->id.Get()) +
+                    "\nfrom pin:" + std::to_string(link->start_id.Get()) +
+                    "\nto pin:" + std::to_string(link->end_id.Get());
+            }
+            frame_tooltips.push_back(tooltip);
+            break;
         }
     }
 }
@@ -2820,13 +2840,29 @@ void ProductionApp::DragLink()
                 const bool end_is_plug = IsVehiclePlug(end_pin);
                 const bool both_plugs = start_is_plug && end_is_plug;
                 const bool one_plug = start_is_plug != end_is_plug;
+                // A pin may carry several belts (one machine feeding two consumers, or two
+                // feeding one): its rate is the sum of its links. What it may not carry is the
+                // SAME pair twice - a duplicate edge would sit invisibly on top of the first and
+                // silently double the flow.
+                bool already_linked = false;
+                if (start_pin != nullptr && end_pin != nullptr)
+                {
+                    for (const Link* l : start_pin->links)
+                    {
+                        if (l->start == end_pin || l->end == end_pin)
+                        {
+                            already_linked = true;
+                            break;
+                        }
+                    }
+                }
                 if (start_pin == nullptr ||
                     end_pin == nullptr ||
                     start_pin == end_pin ||
                     start_pin->direction == end_pin->direction ||
                     start_pin->node == end_pin->node ||
                     one_plug ||                                  // belt<->plug not allowed
-                    (!both_plugs && (start_pin->link != nullptr || end_pin->link != nullptr)) ||
+                    already_linked ||
                     (!both_plugs && start_pin->item != nullptr && end_pin->item != nullptr && start_pin->item != end_pin->item) ||
                     (!both_plugs && start_pin->GetLocked() && end_pin->GetLocked() && start_pin->current_rate != end_pin->current_rate) ||
                     fuel_pin_rejects
@@ -2857,8 +2893,10 @@ void ProductionApp::DragLink()
         if (ax::NodeEditor::QueryNewNode(&input_pin_id))
         {
             Pin* input_pin = FindPin(input_pin_id);
-            // Plugs only connect to other plugs, so don't spawn a (belt) node from one.
-            if (input_pin == nullptr || input_pin->link != nullptr || IsVehiclePlug(input_pin))
+            // Plugs only connect to other plugs, so don't spawn a (belt) node from one. An
+            // already-linked pin is fine: dragging a second belt off it into empty canvas is how
+            // you add another consumer to a machine that already feeds one.
+            if (input_pin == nullptr || IsVehiclePlug(input_pin))
             {
                 ax::NodeEditor::RejectNewItem(ImColor(255, 0, 0), 2.0f);
             }

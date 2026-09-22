@@ -74,6 +74,8 @@ std::string SessionSerializer::Serialize() const
             });
             continue;
         }
+        // The edge's own rate. On a single-link pin it equals both ends, but a pin with fan-out
+        // splits its rate across branches, and only the edge knows its share.
         saved_links.push_back({
             { "start", {
                 { "node", get_node_index(l->start->node) },
@@ -82,6 +84,10 @@ std::string SessionSerializer::Serialize() const
             { "end", {
                 { "node", get_node_index(l->end->node) },
                 { "pin", get_pin_index(l->end) }
+            }},
+            { "rate", {
+                { "num", l->current_rate.GetNumerator() },
+                { "den", l->current_rate.GetDenominator() }
             }}
         });
     }
@@ -162,6 +168,21 @@ void SessionSerializer::Deserialize(const std::string& s)
 
         float dummy_error_time = 0.0f;
         graph.CreateLink(start_node->outs[start_pin_index].get(), end_node->ins[end_pin_index].get(), false, dummy_error_time, 0.0f);
+
+        Link* created = graph.links.back().get();
+        if (l.contains("rate"))
+        {
+            created->current_rate = FractionalNumber(
+                l["rate"]["num"].get<long long int>(),
+                l["rate"]["den"].get<long long int>());
+        }
+        else
+        {
+            // A save written before multi-link pins existed: every pin there carried at most one
+            // link, so the edge's rate is simply its end pin's rate. Rebuilding it that way makes
+            // an old file load into exactly the graph it described.
+            created->current_rate = created->end->current_rate;
+        }
     }
 
     // Rebuild route (plug<->plug) links between vehicle stations.

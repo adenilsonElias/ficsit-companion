@@ -4,6 +4,8 @@
 
 #include <imgui_node_editor.h>
 
+#include "domain/core/fractional_number.hpp"
+
 struct Pin;
 
 struct Link
@@ -22,6 +24,10 @@ struct Link
     Pin* end;
     const ax::NodeEditor::PinId start_id;
     const ax::NodeEditor::PinId end_id;
+
+    /// @brief The rate flowing along this edge. On a single-link pin it equals the rate of both
+    ///        ends; on a pin with fan-out, the links' rates sum to the pin's rate.
+    FractionalNumber current_rate;
 
     std::optional<ax::NodeEditor::FlowDirection> flow;
 };

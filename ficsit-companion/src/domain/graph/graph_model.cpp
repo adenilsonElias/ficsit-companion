@@ -105,28 +105,42 @@ void GraphModel::CreateLink(Pin* start, Pin* end, bool trigger_update, float& er
         }
         return;
     }
-    start->link = created;
-    end->link = created;
-    if (trigger_update && start->current_rate != end->current_rate)
+    start->links.push_back(created);
+    end->links.push_back(created);
+
+    // Which end drives the solve. When one side already carried links, this new edge is a
+    // fan-out (or fan-in) branch: the *new* end dictates its rate - the consumer just wired up
+    // keeps the demand it was configured with - and the fanning pin absorbs the sum, ramping its
+    // machine up. Pushing from the source here instead (the plain-edge behaviour) would squeeze
+    // the new consumer into the rate the source already happened to carry.
+    const bool start_fans = start->links.size() > 1;
+    const bool end_fans = end->links.size() > 1;
+    const Pin* fan_constraint = start_fans ? end : (end_fans ? start : nullptr);
+
+    if (trigger_update && (fan_constraint != nullptr || start->current_rate != end->current_rate))
     {
+        const Pin* solve_pin = fan_constraint != nullptr ? fan_constraint : start;
         try
         {
-            if (!RateSolver::Solve(nodes, links, start, start->current_rate, error_time, error_flow_duration))
+            if (!RateSolver::Solve(nodes, links, solve_pin, solve_pin->current_rate, error_time, error_flow_duration))
             {
-                DeleteLink(links.back()->id);
+                DeleteLink(created->id);
                 return;
             }
         }
         catch (const std::runtime_error&)
         {
-            DeleteLink(links.back()->id);
+            DeleteLink(created->id);
             fprintf(stderr, "Propagation error, please report this issue on github or discord\n");
             error_time = error_flow_duration;
             return;
         }
     }
-    // Set lock state
-    if (start->GetLocked() || end->GetLocked())
+    // Set lock state. Only when the new edge is the sole link on both sides: a lock means "this
+    // rate is fixed", which only carries across an edge whose two ends must match. A pin that
+    // fans out keeps its branches independently lockable.
+    if (start->links.size() == 1 && end->links.size() == 1 &&
+        (start->GetLocked() || end->GetLocked()))
     {
         start->SetLocked(true);
         end->SetLocked(true);
@@ -276,9 +290,18 @@ void GraphModel::DeleteLink(ax::NodeEditor::LinkId id)
             }
             return;
         }
-        if (Pin* start = (*it)->start; start != nullptr)
+        // Unindex this link from a pin, and report whether that left the pin with no link at
+        // all. The item/rate cleanup below only applies to a pin that went fully unlinked:
+        // under fan-out the remaining links still type and feed the pin.
+        Link* dead = it->get();
+        auto detach = [dead](Pin* pin) {
+            std::vector<Link*>& ls = pin->links;
+            ls.erase(std::remove(ls.begin(), ls.end(), dead), ls.end());
+            return ls.empty();
+        };
+
+        if (Pin* start = (*it)->start; start != nullptr && detach(start))
         {
-            start->link = nullptr;
             // If either end was an organizer node, check the name is still valid
             if (start->node->IsOrganizer())
             {
@@ -290,9 +313,8 @@ void GraphModel::DeleteLink(ax::NodeEditor::LinkId id)
                 start->current_rate = 0;
             }
         }
-        if (Pin* end = (*it)->end; end != nullptr)
+        if (Pin* end = (*it)->end; end != nullptr && detach(end))
         {
-            end->link = nullptr;
             // If either end was an organizer node, check the name is still valid
             if (end->node->IsOrganizer())
             {
@@ -319,20 +341,17 @@ void GraphModel::DeleteNode(ax::NodeEditor::NodeId id)
     const auto it = std::find_if(nodes.begin(), nodes.end(), [id](const std::unique_ptr<Node>& n) { return n->id == id; });
     if (it != nodes.end())
     {
+        // Collect the ids first: DeleteLink mutates the pins' link vectors as it goes.
+        std::vector<ax::NodeEditor::LinkId> belt_links;
         for (auto& p : (*it)->ins)
         {
-            if (p->link != nullptr)
-            {
-                DeleteLink(p->link->id);
-            }
+            for (Link* l : p->links) belt_links.push_back(l->id);
         }
         for (auto& p : (*it)->outs)
         {
-            if (p->link != nullptr)
-            {
-                DeleteLink(p->link->id);
-            }
+            for (Link* l : p->links) belt_links.push_back(l->id);
         }
+        for (const auto lid : belt_links) DeleteLink(lid);
         // Vehicle station: delete the plug's route links (held outside ins/outs).
         if ((*it)->IsLogistics())
         {

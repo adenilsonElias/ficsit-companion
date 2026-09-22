@@ -108,7 +108,7 @@ void OrganizerNode::RemoveItemIfNotForced()
 
     for (auto& p : ins)
     {
-        if (p->link != nullptr)
+        if (!p->links.empty())
         {
             return;
         }
@@ -116,7 +116,7 @@ void OrganizerNode::RemoveItemIfNotForced()
 
     for (auto& p : outs)
     {
-        if (p->link != nullptr)
+        if (!p->links.empty())
         {
             return;
         }

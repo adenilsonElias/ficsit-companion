@@ -22,11 +22,17 @@ static std::unordered_set<const Pin*> graph_update_multi_pins_constrained;
 
 namespace
 {
-    // The far end of a belt pin's link (the pin feeding/consuming this one).
-    Pin* BeltFarEnd(const Pin* pin)
+    // The far end of one of a pin's links (the pin feeding/consuming this one along that edge).
+    Pin* BeltFarEnd(const Pin* pin, const Link* link)
     {
-        if (pin->link == nullptr) return nullptr;
-        return pin->direction == ax::NodeEditor::PinKind::Input ? pin->link->start : pin->link->end;
+        return pin->direction == ax::NodeEditor::PinKind::Input ? link->start : link->end;
+    }
+
+    // The direction flow should be drawn in when it starts from this pin.
+    ax::NodeEditor::FlowDirection FlowFrom(const Pin* pin)
+    {
+        return pin->direction == ax::NodeEditor::PinKind::Input ?
+            ax::NodeEditor::FlowDirection::Backward : ax::NodeEditor::FlowDirection::Forward;
     }
 }
 
@@ -39,16 +45,29 @@ namespace rate_solver_detail
         // Current queue of pins that had their new rate set and need to propagate it
         std::queue<const Pin*> pins_to_propagate;
         pins_to_propagate.push(in.constraint_pin);
-        // We need to process the first link here to prevent infinite loop
-        // in which each end triggers an update of the other one
-        if (in.constraint_pin->link != nullptr)
-        {
-            pins_to_propagate.push(in.constraint_pin->direction == ax::NodeEditor::PinKind::Input ? in.constraint_pin->link->start : in.constraint_pin->link->end);
-            if (!in.constraint_pin->link->flow.has_value())
+        // Pull every link of a pin into the solve: record the edge, mark its flow, and queue the
+        // pin on its far end. A single-link pin walks exactly one edge, as before; a pin with
+        // fan-out walks all of them, so no branch is left out of the system.
+        //
+        // Each edge is walked at most once (relevant_links is the guard). That is also what
+        // keeps the walk terminating: without it the two ends of a link would keep queueing
+        // each other forever.
+        auto expand_links = [&seed, &pins_to_propagate](const Pin* pin) {
+            for (Link* l : pin->links)
             {
-                in.constraint_pin->link->flow = in.constraint_pin->direction == ax::NodeEditor::PinKind::Input ? ax::NodeEditor::FlowDirection::Backward : ax::NodeEditor::FlowDirection::Forward;
+                if (!seed.relevant_links.insert(l).second)
+                {
+                    continue;
+                }
+                pins_to_propagate.push(BeltFarEnd(pin, l));
+                if (!l->flow.has_value())
+                {
+                    l->flow = FlowFrom(pin);
+                }
             }
-        }
+        };
+
+        expand_links(in.constraint_pin);
 
         // A secondary queue to store multi-pin (merger/custom splitter) that should be updated,
         // but could also be constrained, so wait to see and if not constrained before propagating from it
@@ -73,15 +92,7 @@ namespace rate_solver_detail
                 if (seed.relevant_pins.find(maybe_pin) == seed.relevant_pins.end())
                 {
                     seed.relevant_pins.insert(maybe_pin);
-                    if (maybe_pin->link != nullptr)
-                    {
-                        const Pin* linked_pin = maybe_pin->direction == ax::NodeEditor::PinKind::Input ? maybe_pin->link->start : maybe_pin->link->end;
-                        pins_to_propagate.push(linked_pin);
-                        if (!maybe_pin->link->flow.has_value())
-                        {
-                            maybe_pin->link->flow = maybe_pin->direction == ax::NodeEditor::PinKind::Input ? ax::NodeEditor::FlowDirection::Backward : ax::NodeEditor::FlowDirection::Forward;
-                        }
-                    }
+                    expand_links(maybe_pin);
                 }
             }
             // No valid multi_pin_maybe_constrained, just break
@@ -93,6 +104,9 @@ namespace rate_solver_detail
             pins_to_propagate.pop();
 
             seed.relevant_pins.insert(updated_pin);
+            // Walk this pin's other edges too. A pin reached along one link may fan out to more
+            // consumers, and every branch has to enter the system or its variable goes missing.
+            expand_links(updated_pin);
 
             switch (updated_pin->node->GetKind())
             {
@@ -107,14 +121,7 @@ namespace rate_solver_detail
                     if (p.get() != updated_pin && seed.relevant_pins.find(p.get()) == seed.relevant_pins.end())
                     {
                         seed.relevant_pins.insert(p.get());
-                        if (p->link != nullptr)
-                        {
-                            pins_to_propagate.push(p->link->start);
-                            if (!p->link->flow.has_value())
-                            {
-                                p->link->flow = p->direction == ax::NodeEditor::PinKind::Input ? ax::NodeEditor::FlowDirection::Backward : ax::NodeEditor::FlowDirection::Forward;
-                            }
-                        }
+                        expand_links(p.get());
                     }
                 }
                 for (const auto& p : updated_pin->node->outs)
@@ -123,14 +130,7 @@ namespace rate_solver_detail
                     if (p.get() != updated_pin && seed.relevant_pins.find(p.get()) == seed.relevant_pins.end())
                     {
                         seed.relevant_pins.insert(p.get());
-                        if (p->link != nullptr)
-                        {
-                            pins_to_propagate.push(p->link->end);
-                            if (!p->link->flow.has_value())
-                            {
-                                p->link->flow = p->direction == ax::NodeEditor::PinKind::Input ? ax::NodeEditor::FlowDirection::Backward : ax::NodeEditor::FlowDirection::Forward;
-                            }
-                        }
+                        expand_links(p.get());
                     }
                 }
             }
@@ -152,14 +152,7 @@ namespace rate_solver_detail
                     if (!single_pin->GetLocked() && single_pin != updated_pin && seed.relevant_pins.find(single_pin) == seed.relevant_pins.end())
                     {
                         seed.relevant_pins.insert(single_pin);
-                        if (single_pin->link != nullptr)
-                        {
-                            pins_to_propagate.push(single_pin->direction == ax::NodeEditor::PinKind::Input ? single_pin->link->start : single_pin->link->end);
-                            if (!single_pin->link->flow.has_value())
-                            {
-                                single_pin->link->flow = single_pin->direction == ax::NodeEditor::PinKind::Input ? ax::NodeEditor::FlowDirection::Backward : ax::NodeEditor::FlowDirection::Forward;
-                            }
-                        }
+                        expand_links(single_pin);
                     }
 
                     // Process the other output pins
@@ -202,15 +195,7 @@ namespace rate_solver_detail
                             ActiveGroup ag;
                             auto pull = [&](Pin* p) {
                                 seed.relevant_pins.insert(p);
-                                if (p->link != nullptr)
-                                {
-                                    pins_to_propagate.push(BeltFarEnd(p));
-                                    if (!p->link->flow.has_value())
-                                    {
-                                        p->link->flow = p->direction == ax::NodeEditor::PinKind::Input ?
-                                            ax::NodeEditor::FlowDirection::Backward : ax::NodeEditor::FlowDirection::Forward;
-                                    }
-                                }
+                                expand_links(p);
                             };
                             // Only belts that actually carry flow take part in the
                             // balance: a belt is a participant when it is connected
@@ -219,7 +204,7 @@ namespace rate_solver_detail
                             // belt that merely shows the item type is skipped, so flow
                             // never gets split onto a belt nothing is attached to.
                             auto is_participant = [&](const Pin* p) {
-                                return p->link != nullptr || p->GetLocked()
+                                return !p->links.empty() || p->GetLocked()
                                     || p->current_rate.GetNumerator() != 0 || p == in.constraint_pin;
                             };
                             for (Pin* p : g.supply) { if (is_participant(p)) { ag.supply.push_back(p); pull(p); } }
