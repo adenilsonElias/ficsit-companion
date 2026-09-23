@@ -1,0 +1,5 @@
+# Per-project toolchain, used by `mise exec` on the build machine.
+# The C++ compiler (MSVC on Windows) is not managed here: it stays a system install.
+[tools]
+cmake = "4.4.3" # 4.2+ is required for the "Visual Studio 18 2026" generator
+node = "22"     # only needed by the optional save-import tool (tools/sav_import)
