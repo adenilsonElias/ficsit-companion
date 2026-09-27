@@ -98,7 +98,7 @@ Polymorphic node hierarchy:
 
 ### Persistence
 
-- Session: `saved/last_session.fcs` — JSON graph snapshot, loaded/saved via `json.hpp/cpp`
+- Session: `last_session.fcs` in the working directory (not in `saved/`) — JSON graph snapshot, loaded/saved via `json.hpp/cpp`. Named saves go to `saved/<name>.fcs`
 - Settings: `settings.json` — spoiler visibility, unlocked alt recipes, power display mode
 
 ### Key Files
